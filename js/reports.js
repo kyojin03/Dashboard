@@ -90,6 +90,25 @@
     var h = Math.floor(min / 60), m = Math.round(min % 60);
     return h > 0 ? h + 'h ' + m + 'm' : m + 'm';
   }
+  // On-time completion, mirroring js/metrics.js onTimeCompletion and the
+  // backend: % completed by ORIGINAL deadline and by CURRENT (approved)
+  // deadline. Cancelled/archived excluded; tasks without a deadline are
+  // excluded from that denominator (counted, not hidden).
+  function onTimeCompletion(tasks) {
+    var done = elig(tasks).filter(function (t) { return t.status === 'Completed' && t.completed_at; });
+    function pct(a, b) { return b ? r1(a / b * 100) : null; }
+    var withOrig = done.filter(function (t) { return t.original_due_at; });
+    var onOrig = withOrig.filter(function (t) { return String(t.completed_at).slice(0, 10) <= String(t.original_due_at).slice(0, 10); });
+    var withCur = done.filter(function (t) { return t.current_due_at || t.original_due_at; });
+    var onCur = withCur.filter(function (t) {
+      var d = t.current_due_at || t.original_due_at;
+      return String(t.completed_at).slice(0, 10) <= String(d).slice(0, 10);
+    });
+    return {
+      original: { percent: pct(onOrig.length, withOrig.length), onTime: onOrig.length, total: withOrig.length },
+      current: { percent: pct(onCur.length, withCur.length), onTime: onCur.length, total: withCur.length }
+    };
+  }
   function buildReportText(o) {
     var L = [];
     L.push('WEEKLY ACCOMPLISHMENT REPORT — ' + o.memberName);
@@ -116,5 +135,5 @@
     return L.join('\n');
   }
 
-  window.Reports = { summarize: summarize, turnaround: turnaround, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
+  window.Reports = { summarize: summarize, turnaround: turnaround, onTimeCompletion: onTimeCompletion, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
 })();

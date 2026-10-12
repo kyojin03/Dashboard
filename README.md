@@ -8,13 +8,13 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 - Frontend: `index.html` + `css/` + `js/` (no framework, no `google.script.run`, `fetch()` only)
 - Backend: `backend/Code.gs` (Apps Script, deployed as `/exec`)
 - Database: Google Sheets (8 sheets, stable headers, position-independent reads)
-- Tests: `npm test` — 47 tests, all passing (Node 24, verified 2026-10-12: 19 formula/validation tests + 28 audit regression tests)
+- Tests: `npm test` — 54 tests, all passing (Node 24: 19 formula/validation + 28 audit regression + 7 personal-dashboard/member-scope tests)
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
-| `index.html` | Single-page app (individual + team dashboards, tasks, impacts, reports, admin, config) |
+| `index.html` | Single-page app (My Dashboard, Team Overview, Reports, Settings) |
 | `css/styles.css` | Institutional responsive theme |
 | `js/config.js` | API URL resolution (`?api=` → localStorage → default), session-only keys |
 | `js/api.js` | API client — UI/API separation, consistent `{ok,data}` envelope |
@@ -62,13 +62,13 @@ Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G
 Count completion = completed eligible ÷ total eligible × 100 (cancelled excluded, planned/additional separate). Weighted = Σ(est × % ÷ 100) ÷ Σ(est) × 100 (tasks without positive estimates excluded and counted). On-time vs original and vs current deadlines (both preserved). Overdue = past current deadline, not completed/cancelled, Asia/Manila date. Same-day = completed on receipt date ÷ completed with timestamps (+ pending count shown). See `docs/METRICS.md` for the full contract.
 
 ## Testing
-`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, access boundaries, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and per-action key enforcement. Synthetic data only. **Verified: 47/47 pass.**
+`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, access boundaries, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and per-action key enforcement, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging. Synthetic data only. **Verified: 54/54 pass.**
 
 ## What is implemented vs. what remains
 - ✅ Data model (8 sheets), backend API (20 actions), locking + idempotency, audit events
 - ✅ Task CRUD, daily updates (history-preserving), work logs, impact links, history view, archive
 - ✅ Individual + team dashboards, filters, turnaround + workload analytics, data-quality flags
-- ✅ Weekly report (individual + team), CSV export, print/PDF layout, idempotent snapshots
+- ✅ Weekly report (personal + team), CSV export, print/PDF layout, idempotent snapshots
 - ✅ Demo mode (labeled), loading/error/success states, no silent localStorage fallback
 - ✅ Audit fixes 2026-10-12: worklog rollup single-count, validate-before-write (no orphan rows/events), `original_due_at` immutable after creation, impact self-link/planned-only enforcement, week-scoped weekly reports, Manila overdue/same-day/week-start in all frontend paths, stable client task ids + double-submit guards, partial-refresh warnings
 - ⚠️ **Not verified in this environment:** live Apps Script deployment + real Sheets round-trip (requires Google account + deployment step above); scheduled snapshot trigger (configure per `docs/DEPLOYMENT.md`); organizational SSO (documented migration path in `docs/SECURITY.md`)

@@ -1,8 +1,8 @@
-/* Main UI — views: individual, team, tasks, daily, impacts, reports, admin, config. */
+/* Main UI — views: My Dashboard (personal), Team Overview (management), Reports, Settings. */
 (function () {
   var S = window.Store.state;
   var R = window.Reports;
-  var view = 'individual';
+  var view = 'my';
   var filters = { status: '', type: '', priority: '', q: '' };
   var lastReport = '';
 
@@ -118,32 +118,83 @@
     return h + '</tbody></table></div>';
   }
 
-  // ---------- views ----------
-  function vIndividual() {
-    var wt = weekTasks(scopedTasks());
-    var sum = R.summarize(wt, weekLogs());
-    var planned = wt.filter(function (t) { return t.task_type === 'PLANNED'; });
-    var adds = wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; });
-    var ta = R.turnaround(adds);
-    var daily = S.updates.filter(function (u) {
-      return R.inWeek(u.update_date, S.weekStart) && (S.selectedMember === 'ALL' || u.member_id === S.selectedMember);
-    });
-    return cardsHTML(sum, ta) +
-      '<div class="panel"><h2>My tasks (' + wt.length + ' in week scope)</h2>' + filterBar() + taskTable(wt) + quickAddButtons() + '</div>' +
-      '<div class="panel"><h2>Daily activity</h2>' + (daily.length ? '<table><thead><tr><th>Date</th><th>Task</th><th>Progress</th><th>Accomplishment</th><th>Blockers</th></tr></thead><tbody>' +
-        daily.map(function (u) {
-          return '<tr><td>' + esc(u.update_date) + '</td><td>' + esc(taskTitle(u.task_id)) + '</td><td>' + esc(u.previous_percent) + '% → ' + esc(u.new_percent) + '%</td><td>' + esc(u.accomplishment_notes || '') + '</td><td>' + esc(u.blocker_notes || '') + '</td></tr>';
-        }).join('') + '</tbody></table>' : '<div class="empty">No daily updates recorded for this week yet. Use Tasks → Open → Add daily update.</div>') + '</div>' +
-      '<div class="panel"><h2>Workload analysis</h2>' +
-      '<div class="bar"><span style="width:170px">Planned effort share</span><div class="track"><div class="fill" style="width:' + plannedShare(wt) + '%"></div></div><span class="muted">' + plannedShare(wt) + '%</span></div>' +
-      impactList() + '</div>';
+  // ---------- personal dashboard ----------
+  function ageDays(iso) {
+    if (!iso) return null;
+    var ms = Date.now() - new Date(iso).getTime();
+    if (!isFinite(ms) || ms < 0) return 0;
+    return Math.round(ms / 86400000);
   }
 
-  function plannedShare(wt) {
-    var pe = wt.filter(function (t) { return t.task_type === 'PLANNED'; }).reduce(function (s, t) { return s + (Number(t.actual_minutes) || 0); }, 0);
-    var ae = wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }).reduce(function (s, t) { return s + (Number(t.actual_minutes) || 0); }, 0);
-    if (!pe && !ae) return 0;
-    return Math.round(pe / (pe + ae) * 100);
+  function myCards(sum, ot, ta) {
+    function card(label, val, hint) {
+      return '<div class="card"><h3>' + label + '</h3><div class="big">' + val + '</div><div class="hint">' + hint + '</div></div>';
+    }
+    return '<div class="grid cards">' +
+      card('Task completion', R.fmtPct(sum.plannedCompletion), sum.plannedCompleted + ' of ' + sum.plannedCount + ' planned done') +
+      card('Weighted completion', R.fmtPct(sum.weightedCompletion), sum.weightedExcluded + ' without estimates excluded') +
+      card('On-time (original)', R.fmtPct(ot.original.percent), ot.original.onTime + ' of ' + ot.original.total + ' by original deadline') +
+      card('On-time (current)', R.fmtPct(ot.current.percent), ot.current.onTime + ' of ' + ot.current.total + ' by approved deadline') +
+      card('Additional work', sum.additionalCompleted + '/' + sum.additionalCount, R.fmtH(sum.additionalEffortMinutes) + ' actual effort') +
+      card('Turnaround (median)', ta.medianHours === null ? '—' : ta.medianHours + 'h', 'same-day ' + R.fmtPct(ta.sameDayRate) + ' (' + ta.sameDay + '/' + ta.sameDayDen + ')') +
+      card('Pending', sum.plannedCount - sum.plannedCompleted + sum.additionalCount - sum.additionalCompleted, 'open tasks needing work') +
+      card('Blocked', sum.blockedCount, 'waiting on something else') +
+      '</div><p class="kpi-def">No single number here is an efficiency score. Completion sits alongside on-time delivery, additional workload, turnaround, pending work, and blockers — read them together. Empty data shows —, never 0%.</p>';
+  }
+
+  function pendingPanel(wt) {
+    var open = wt.filter(function (t) { return t.status !== 'Completed' && t.status !== 'Cancelled'; });
+    var blocked = wt.filter(function (t) { return t.status === 'Blocked'; });
+    var noReason = open.filter(function (t) { return !t.blocked_reason && !t.impact_reason && !t.impact_notes; });
+    function row(t) {
+      var due = (t.current_due_at || t.original_due_at || '').slice(0, 10) || 'no deadline';
+      var age = ageDays(t.created_at);
+      return '<tr><td><strong>' + esc(t.title) + '</strong> <span class="pill ' + esc(String(t.task_type).toLowerCase()) + '">' + esc(t.task_type) + '</span></td>' +
+        '<td>' + esc(t.status) + ' · ' + esc(t.completion_percent) + '%</td>' +
+        '<td>' + esc(due) + (t.original_due_at && t.current_due_at && t.original_due_at !== t.current_due_at ? '<br><span class="muted">was ' + esc(String(t.original_due_at).slice(0, 10)) + '</span>' : '') + '</td>' +
+        '<td class="muted">' + (age === null ? '—' : age + 'd old') + '</td>' +
+        '<td>' + esc(t.blocked_reason || t.impact_notes || '') + '</td>' +
+        '<td><button class="btn small" data-open="' + esc(t.task_id) + '">Open</button></td></tr>';
+    }
+    var h = '<div class="panel"><h2>Pending work (' + open.length + ')</h2>';
+    h += open.length ? '<div style="overflow-x:auto"><table><thead><tr><th>Task</th><th>Progress</th><th>Deadline</th><th>Age</th><th>Reason / notes</th><th></th></tr></thead><tbody>' +
+      open.map(row).join('') + '</tbody></table></div>' : '<div class="empty">Nothing pending — nice. Add next week\'s planned tasks when ready.</div>';
+    h += blocked.length ? '<h2 style="margin-top:14px">Blocked (' + blocked.length + ')</h2><ul>' +
+      blocked.map(function (t) { return '<li><strong>' + esc(t.title) + '</strong> — ' + esc(t.blocked_reason || 'reason not recorded yet; open the task and add one.'); }).join('') + '</ul>' : '';
+    h += noReason.length ? '<p class="muted">' + noReason.length + ' open task(s) still need a delay reason — flagged as requiring clarification in the weekly report.</p>' : '';
+    return h + '</div>';
+  }
+
+  function vMy() {
+    if (S.selectedMember === 'ALL') {
+      return '<div class="panel"><h2>Whose work are you recording?</h2>' +
+        '<p>Select your name at the top to open your personal dashboard — your tasks, your progress, your weekly report.</p>' +
+        '<p class="muted">Selecting a name only chooses what to view. It does not prove who you are; saving still needs the edit key.</p></div>' +
+        '<div class="panel"><h2>How it works</h2><ol>' +
+        '<li>Add your <strong>planned tasks</strong> at the start of the week (title + deadline is enough).</li>' +
+        '<li>During the week, <strong>quick-add unexpected work</strong> as additional tasks.</li>' +
+        '<li>Update <strong>progress + accomplishments</strong> daily; log effort; note blockers.</li>' +
+        '<li>Link extra work to any planned task it delayed, with a reason.</li>' +
+        '<li>Generate your <strong>weekly accomplishment report</strong> from the records.</li></ol></div>';
+    }
+    var m = S.members.filter(function (x) { return x.member_id === S.selectedMember; })[0];
+    var wt = weekTasks(scopedTasks());
+    var sum = R.summarize(wt, weekLogs());
+    var ot = R.onTimeCompletion(wt);
+    var ta = R.turnaround(wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
+    var daily = S.updates.filter(function (u) { return R.inWeek(u.update_date, S.weekStart) && u.member_id === S.selectedMember; });
+    var h = '<div class="panel"><h2>' + esc(m ? m.display_name : S.selectedMember) + (m ? ' <span class="muted">· ' + esc(m.role) + '</span>' : '') + '</h2>' +
+      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). Progress measures deliverables achieved, not time elapsed.</p></div>';
+    h += myCards(sum, ot, ta);
+    h += '<div class="panel"><h2>My tasks (' + wt.length + ' this week)</h2>' + filterBar() + taskTable(wt) + quickAddButtons() + '</div>';
+    h += '<div class="panel"><h2>Daily accomplishments</h2>' + (daily.length ? '<table><thead><tr><th>Date</th><th>Task</th><th>Progress</th><th>What got done</th><th>Blockers</th></tr></thead><tbody>' +
+      daily.map(function (u) {
+        return '<tr><td>' + esc(u.update_date) + '</td><td>' + esc(taskTitle(u.task_id)) + '</td><td>' + esc(u.previous_percent) + '% → ' + esc(u.new_percent) + '%</td><td>' + esc(u.accomplishment_notes || '') + (u.remaining_work ? '<br><span class="muted">Next: ' + esc(u.remaining_work) + '</span>' : '') + '</td><td>' + esc(u.blocker_notes || '') + '</td></tr>';
+      }).join('') + '</tbody></table>' : '<div class="empty">No updates yet this week. Open a task → “Add daily update” — it takes seconds and builds your weekly report.</div>') + '</div>';
+    h += pendingPanel(wt);
+    h += '<div class="panel"><h2>Extra work vs plan</h2><p class="muted">When additional work delays a planned task, link them with a reason — that link (not the hours alone) is what explains the delay.</p>' + impactList() +
+      '<div class="row"><button class="btn primary" data-act="new-impact">+ Link extra work to affected plan</button></div></div>';
+    return h;
   }
 
   function taskTitle(id) {
@@ -165,28 +216,34 @@
       }).join('') + '</tbody></table>';
   }
 
+  // ---------- team overview (management, read-only) ----------
   function vTeam() {
     var wt = weekTasks(S.tasks.filter(function (t) { return !t.archived_at; }));
     var sum = R.summarize(wt, weekLogs());
     var ta = R.turnaround(wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
-    var per = S.members.map(function (m) {
+    var rows = S.members.map(function (m) {
       var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
       var ml = S.workLogs.filter(function (l) { return l.member_id === m.member_id && R.inWeek(l.work_date || l.created_at, S.weekStart); });
       var s = R.summarize(mt, ml);
-      return { m: m, s: s, mt: mt };
+      var ot = R.onTimeCompletion(mt);
+      var t2 = R.turnaround(mt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
+      var pending = mt.filter(function (t) { return t.status !== 'Completed' && t.status !== 'Cancelled'; }).length;
+      return { m: m, s: s, ot: ot, t2: t2, pending: pending };
     });
-    var h = cardsHTML(sum, ta);
-    h += '<div class="panel"><h2>Planned completion by member (role-aware — do not rank on counts alone)</h2>' +
-      per.map(function (r) {
-        var pct = r.s.plannedCompletion === null ? 0 : r.s.plannedCompletion;
-        return '<div class="bar"><span style="width:250px">' + esc(r.m.display_name) + '<br><span class="muted">' + esc(r.m.role) + ' · ' + r.s.plannedCompleted + '/' + r.s.plannedCount + ' planned</span></span><div class="track"><div class="fill" style="width:' + pct + '%"></div></div><span>' + R.fmtPct(r.s.plannedCompletion) + '</span></div>';
-      }).join('') +
-      '<p class="kpi-def">Roles differ (e.g. Laboratory Technician vs Research Assistant vs Director). Compare planned vs additional mix, effort, blockers, and documented impacts — never a single KPI.</p></div>';
-    h += '<div class="panel"><h2>Additional effort by member</h2>' +
-      per.map(function (r) {
-        return '<div class="bar"><span style="width:250px">' + esc(r.m.display_name) + '</span><div class="track"><div class="fill" style="width:' + Math.min(100, r.s.additionalEffortMinutes / 6) + '%"></div></div><span class="muted">' + R.fmtH(r.s.additionalEffortMinutes) + ' · ' + r.s.additionalCount + ' tasks</span></div>';
-      }).join('') + '</div>';
-    h += '<div class="panel"><h2>All tasks in scope (' + wt.length + ')</h2>' + filterBar() + taskTable(wt) + '</div>';
+    var h = '<div class="panel"><h2>Team overview <span class="muted">· read-only; members record via My Dashboard</span></h2>' +
+      '<p class="muted">Roles differ, so people are never ranked on one number. Each row shows completion together with on-time delivery, extra work, effort, pending load, and blockers.</p></div>';
+    h += cardsHTML(sum, ta);
+    h += '<div class="panel"><h2>Individual summaries</h2><div style="overflow-x:auto"><table><thead><tr><th>Member</th><th>Planned done</th><th>On-time (orig)</th><th>Extra work</th><th>Effort (extra)</th><th>Turnaround</th><th>Pending</th><th>Blocked</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr><td><strong>' + esc(r.m.display_name) + '</strong><br><span class="muted">' + esc(r.m.role) + '</span></td>' +
+          '<td>' + r.s.plannedCompleted + '/' + r.s.plannedCount + ' (' + R.fmtPct(r.s.plannedCompletion) + ')</td>' +
+          '<td>' + R.fmtPct(r.ot.original.percent) + ' <span class="muted">' + r.ot.original.onTime + '/' + r.ot.original.total + '</span></td>' +
+          '<td>' + r.s.additionalCompleted + '/' + r.s.additionalCount + '</td>' +
+          '<td>' + R.fmtH(r.s.additionalEffortMinutes) + '</td>' +
+          '<td>' + (r.t2.medianHours === null ? '—' : r.t2.medianHours + 'h') + '</td>' +
+          '<td>' + r.pending + '</td><td>' + r.s.blockedCount + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+    h += '<div class="panel"><h2>All tasks in scope (' + wt.length + ') — open for detail</h2>' + filterBar() + taskTable(wt) + '</div>';
     h += '<div class="panel"><h2>Data quality</h2>' + dataQuality(wt) + '</div>';
     return h;
   }
@@ -215,16 +272,6 @@
       '<p class="muted">Quick-add needs only a title — details can be completed later. Progress measures deliverable achieved, not time elapsed.</p>';
   }
 
-  function vTasks() {
-    return '<div class="panel"><h2>Task management</h2>' + filterBar() + taskTable(S.tasks.filter(function (t) { return !t.archived_at; })) + quickAddButtons() + '</div>';
-  }
-
-  function vImpacts() {
-    return '<div class="panel"><h2>Workload impact analysis</h2><p class="muted">Link additional work to the planned tasks it affected. Causation is never inferred — the documented reason and evidence are required. Two hours on an urgent request does not automatically equal a two-hour delay.</p>' +
-      impactList() +
-      '<div class="row"><button class="btn primary" data-act="new-impact">+ Link impact</button></div></div>';
-  }
-
   function vReports() {
     return '<div class="panel"><h2>Weekly accomplishment report</h2>' +
       '<div class="row"><button class="btn primary" data-act="gen-report">Generate report</button>' +
@@ -235,25 +282,22 @@
       '<pre class="report" id="reportPre">' + esc(lastReport || 'Press “Generate report” to preview.') + '</pre></div>';
   }
 
-  function vAdmin() {
-    return '<div class="panel"><h2>Team roster (11 members)</h2><p class="muted">Editing the roster requires the admin key (authorized users only). Member selection elsewhere is a view filter, not identity verification.</p>' +
-      '<table><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th></tr></thead><tbody>' +
-      S.members.map(function (m) { return '<tr><td class="mono">' + esc(m.member_id) + '</td><td>' + esc(m.display_name) + '</td><td>' + esc(m.role) + '</td><td>' + esc(m.is_active) + '</td></tr>'; }).join('') +
-      '</tbody></table><div class="row" style="margin-top:10px"><button class="btn" data-act="add-member">+ Add / edit member (admin)</button></div></div>' +
-      '<div class="panel"><h2>Audit & history</h2><p class="muted">Every create, update, reassignment, deadline change, completion change, and archival is recorded in TaskEvents on the server. Open any task to see its history.</p></div>';
-  }
-
-  function vConfig() {
+  function vSettings() {
     var api = window.AppConfig.getApiBase();
-    return '<div class="panel"><h2>Configuration</h2>' +
+    return '<div class="panel"><h2>Connection</h2>' +
       '<div class="form"><label class="full">Apps Script /exec URL<input id="cfgApi" value="' + esc(api) + '" placeholder="https://script.google.com/macros/s/…/exec"></label>' +
-      '<label>Edit key (session only)<input id="cfgEdit" type="password" placeholder="required for edits in live mode"></label>' +
-      '<label>Admin key (session only)<input id="cfgAdmin" type="password" placeholder="required for roster & settings"></label></div>' +
+      '<label>Edit key (session only)<input id="cfgEdit" type="password" placeholder="required for saving in live mode"></label>' +
+      '<label>Admin key (session only)<input id="cfgAdmin" type="password" placeholder="required for roster"></label></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="save-config">Save & connect</button>' +
       '<button class="btn" data-act="use-demo">Use demo mode</button>' +
       '<button class="btn" data-act="ping">Test connection</button></div>' +
-      '<p class="muted">Keys are kept in sessionStorage (this tab only) and sent with write requests; they are never written into source files. Selecting a member name does not authenticate anyone — see Security docs.</p>' +
-      '<p class="muted">Mode: <strong>' + (window.Store.isDemo() ? 'DEMO' : 'LIVE') + '</strong> · API: <span class="mono">' + esc(api || '(not set)') + '</span></p></div>';
+      '<p class="muted">Keys stay in this tab only and are never written into source files. Selecting a name does not identify anyone.</p>' +
+      '<p class="muted">Mode: <strong>' + (window.Store.isDemo() ? 'DEMO' : 'LIVE') + '</strong> · API: <span class="mono">' + esc(api || '(not set)') + '</span></p></div>' +
+      '<div class="panel"><h2>Team roster (' + S.members.length + ' members)</h2><p class="muted">Roster changes need the admin key (authorized users only).</p>' +
+      '<table><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th></tr></thead><tbody>' +
+      S.members.map(function (m) { return '<tr><td class="mono">' + esc(m.member_id) + '</td><td>' + esc(m.display_name) + '</td><td>' + esc(m.role) + '</td><td>' + esc(m.is_active) + '</td></tr>'; }).join('') +
+      '</tbody></table><div class="row" style="margin-top:10px"><button class="btn" data-act="add-member">+ Add member (admin)</button></div></div>' +
+      '<div class="panel"><h2>Audit history</h2><p class="muted">Creates, updates, reassignments, deadline changes, completions, and archives are recorded server-side. Open any task to see its history.</p></div>';
   }
 
   // ---------- render ----------
@@ -263,13 +307,11 @@
     var el = $('view');
     if (S.loading) { el.innerHTML = '<div class="panel">Loading…</div>'; return; }
     var h = '';
-    if (view === 'individual') h = vIndividual();
+    if (view === 'my') h = vMy();
     else if (view === 'team') h = vTeam();
-    else if (view === 'tasks') h = vTasks();
-    else if (view === 'impacts') h = vImpacts();
     else if (view === 'reports') h = vReports();
-    else if (view === 'admin') h = vAdmin();
-    else if (view === 'config') h = vConfig();
+    else if (view === 'settings') h = vSettings();
+    else { view = 'my'; h = vMy(); }
     el.innerHTML = h;
     bindView();
   }
@@ -305,7 +347,7 @@
 
   function requireLiveKey() {
     if (window.Store.isDemo()) return true;
-    if (!window.AppConfig.getEditKey()) { toast('Enter the edit key in Config first (edits are controlled, not open).'); view = 'config'; render(); return false; }
+    if (!window.AppConfig.getEditKey()) { toast('Enter the edit key in Settings first (saving is controlled, not open).'); view = 'settings'; render(); return false; }
     return true;
   }
 
@@ -553,7 +595,7 @@
 
   function memberDialog() {
     var admin = window.AppConfig.getAdminKey();
-    if (!window.Store.isDemo() && !admin) { toast('Admin key required — enter it in Config.'); view = 'config'; render(); return; }
+    if (!window.Store.isDemo() && !admin) { toast('Admin key required — enter it in Settings.'); view = 'settings'; render(); return; }
     var dlg = document.createElement('dialog');
     dlg.innerHTML = '<h3 style="margin-top:0">Add team member (admin)</h3><div class="form">' +
       '<label class="full">Display name*<input id="mName"></label>' +

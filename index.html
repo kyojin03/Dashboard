@@ -22,20 +22,17 @@
 
   <div class="layout">
     <nav class="nav" aria-label="Dashboard sections">
-      <button data-view="individual">Individual dashboard</button>
-      <button data-view="team">Team dashboard</button>
-      <button data-view="tasks">Tasks</button>
-      <button data-view="impacts">Impacts</button>
+      <button data-view="my">My Dashboard</button>
+      <button data-view="team">Team Overview</button>
       <button data-view="reports">Reports</button>
-      <button data-view="admin">Team admin</button>
-      <button data-view="config">Config</button>
+      <button data-view="settings">Settings</button>
     </nav>
     <main class="main">
       <div id="loading" class="banner" style="display:none">Loading…</div>
       <div id="banner" class="banner"></div>
       <div id="view"></div>
       <footer class="muted no-print" style="margin-top:18px">
-        Internal tool. Member selection is a view filter, not identity verification — edits require an edit key and roster changes require an admin key.
+        Internal tool. Selecting a name chooses whose work to view — it does not verify identity. Edits need an edit key; roster changes need an admin key.
         Time zone Asia/Manila · Reporting week Mon–Sun (working days Mon–Fri). See README for deployment, security, and metric definitions.
       </footer>
     </main>
