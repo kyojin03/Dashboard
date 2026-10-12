@@ -1,0 +1,12 @@
+{
+  "name": "academic-affairs-workload-dashboard",
+  "version": "1.0.0",
+  "description": "Academic Affairs workload, task completion & extra work analytics dashboard (GitHub Pages + Apps Script + Sheets)",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

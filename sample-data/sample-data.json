@@ -1,0 +1,25 @@
+{
+  "_note": "SAMPLE data only — clearly separated from production. Import manually for evaluation; never mix with real records.",
+  "members": [
+    { "member_id": "M001", "display_name": "Michelle Ann F. Pablo", "role": "Academic Affairs Director" },
+    { "member_id": "M002", "display_name": "Michelle M. Macatangay", "role": "Academic Affairs Manager" }
+  ],
+  "tasks": [
+    {
+      "title": "Sample: consolidate enrollment reports",
+      "task_type": "PLANNED",
+      "owner_id": "M002",
+      "status": "In Progress",
+      "completion_percent": 60,
+      "estimated_minutes": 480
+    },
+    {
+      "title": "Sample: urgent accreditation annexes (mid-week request)",
+      "task_type": "ADDITIONAL",
+      "owner_id": "M002",
+      "status": "Completed",
+      "completion_percent": 100,
+      "requested_by": "Academic Affairs Director"
+    }
+  ]
+}

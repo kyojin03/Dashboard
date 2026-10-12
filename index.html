@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Academic Affairs — Workload Analytics Dashboard</title>
+  <meta name="description" content="Internal workload tracking and analytics for the Academic Affairs team: planned vs additional work, completion, turnaround, impacts, and weekly reports.">
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Academic Affairs — Workload Analytics</h1>
+      <div class="sub">What was assigned · what extra work came in · what was completed · what explains the rest</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="actions row">
+      <select id="memberSelect" aria-label="Select member or whole team"></select>
+      <input id="weekInput" type="date" aria-label="Reporting week start (Monday)">
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="nav" aria-label="Dashboard sections">
+      <button data-view="individual">Individual dashboard</button>
+      <button data-view="team">Team dashboard</button>
+      <button data-view="tasks">Tasks</button>
+      <button data-view="impacts">Impacts</button>
+      <button data-view="reports">Reports</button>
+      <button data-view="admin">Team admin</button>
+      <button data-view="config">Config</button>
+    </nav>
+    <main class="main">
+      <div id="loading" class="banner" style="display:none">Loading…</div>
+      <div id="banner" class="banner"></div>
+      <div id="view"></div>
+      <footer class="muted no-print" style="margin-top:18px">
+        Internal tool. Member selection is a view filter, not identity verification — edits require an edit key and roster changes require an admin key.
+        Time zone Asia/Manila · Reporting week Mon–Sun (working days Mon–Fri). See README for deployment, security, and metric definitions.
+      </footer>
+    </main>
+  </div>
+
+  <div id="toasts" class="toast" aria-live="polite"></div>
+
+  <script src="./js/config.js"></script>
+  <script src="./js/api.js"></script>
+  <script src="./js/store.js"></script>
+  <script src="./js/reports.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
