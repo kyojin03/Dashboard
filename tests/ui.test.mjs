@@ -69,13 +69,12 @@ describe('UI wiring consistency', () => {
     assert.ok(!appJs.includes('function saveConfig') && !appJs.includes('function ping('), 'config actions must be removed');
   });
   it('static element ids referenced by the app exist in index.html', () => {
-    for (const id of ['memberSelect', 'weekInput', 'banner', 'loading', 'view', 'toasts']) {
+    for (const id of ['memberSelect', 'weekLabel', 'weekToday', 'banner', 'loading', 'view', 'toasts']) {
       assert.ok(indexHtml.includes(`id="${id}"`), `missing element #${id} in index.html`);
     }
   });
   it('demo mode stays explicitly labeled (sample data never presented as real)', () => {
-    assert.match(appJs, /DEMO MODE/);
-    assert.match(appJs, /Not production data/);
+    assert.match(appJs, /sample data, not production/);
   });
   it('roster display names are untouched', () => {
     const storeJs = fs.readFileSync(path.join(ROOT, 'js/store.js'), 'utf8');
@@ -117,8 +116,8 @@ describe('premium redesign guards', () => {
     assert.ok(appJs.includes('data-snap='));
     assert.ok(appJs.includes('Saved weeks'));
   });
-  it('My Week header shows member + full week range', () => {
+  it('My Week header shows member avatar + full week range', () => {
     assert.ok(appJs.includes('function weekEndOf(weekStart)'));
-    assert.ok(appJs.includes('My Week</p><h2>') || appJs.includes('>My Week</p>'));
+    assert.ok(appJs.includes('class="avatar"'), 'member avatar missing');
   });
 });

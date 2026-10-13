@@ -48,27 +48,67 @@
   // ---------- banner / header ----------
   function renderBanner() {
     var b = $('banner');
-    var sel = S.selectedMember === 'ALL' ? 'Whole team' : esc(memberName(S.selectedMember));
-    var scope = '<br><span class="muted">Viewing: <strong>' + sel + '</strong> · Week starting <strong>' + esc(S.weekStart) + '</strong> (Mon–Sun; working days Mon–Fri, Asia/Manila)</span>';
+    b.hidden = false;
     if (window.Store.isDemo()) {
       b.className = 'banner demo';
-      b.innerHTML = '<strong>DEMO MODE</strong> — labeled sample data for evaluation. Not production data.' + scope;
+      b.innerHTML = '<strong>Demo</strong> · sample data, not production';
       return;
     }
     if (S.error) {
       b.className = 'banner error';
       var retry = S.errorKind === 'connection' ? ' <button class="btn small" data-act="retry">Retry</button>' : '';
       var hint = S.errorKind === 'auth' ? ' Your key was rejected or is missing — saving will ask for it.' : '';
-      b.innerHTML = '<strong>Live data unavailable.</strong> ' + esc(S.error) + hint + retry + scope;
+      b.innerHTML = '<strong>Live data unavailable.</strong> ' + esc(S.error) + hint + retry;
       return;
     }
     if (!S.connected) {
       b.className = 'banner';
-      b.innerHTML = 'Connecting to live data…' + scope;
+      b.innerHTML = 'Connecting to live data…';
       return;
     }
     b.className = 'banner';
-    b.innerHTML = '<strong>LIVE MODE</strong> — team roster and records load automatically. Saving asks for the edit key (used once, never stored).' + scope;
+    b.hidden = true; // live + healthy: nothing to say
+  }
+
+  function statusChip(t, reported, pct) {
+    if (t.status === 'Blocked') return ' <span class="chip bad">Blocked</span>';
+    if (reported && pct >= 100) return ' <span class="chip ok">Complete</span>';
+    if (R.isOverdue(t)) return ' <span class="chip warn">Overdue</span>';
+    if (reported && pct > 0) return ' <span class="chip info">In progress</span>';
+    return ' <span class="chip idle">Not started</span>';
+  }
+  function fmtDay(iso) { var p = parts(iso); return MON[p.m] + ' ' + p.d; }
+  function initials(name) {
+    var w = String(name || '').replace(/[^A-Za-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+    if (!w.length) return '?';
+    return (w[0][0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase();
+  }
+
+  // ---------- week stepper ----------
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function parts(iso) { var p = String(iso).slice(0, 10).split('-'); return { y: +p[0], m: +p[1] - 1, d: +p[2] }; }
+  function fmtRange(weekStart) {
+    var s = parts(weekStart), e = parts(weekEndOf(weekStart));
+    var left = MON[s.m] + ' ' + s.d;
+    var right = (e.m === s.m ? '' : MON[e.m] + ' ') + e.d;
+    return left + ' – ' + right + ', ' + e.y;
+  }
+  function renderWeekLabel() {
+    var l = $('weekLabel'); if (!l) return;
+    l.textContent = fmtRange(S.weekStart);
+    var t = $('weekToday'); if (t) t.hidden = S.weekStart === window.Store.monday(new Date());
+  }
+  function setWeek(iso) {
+    S.weekStart = window.Store.monday(iso + 'T12:00:00Z');
+    submitResult = ''; lastReport = '';
+    renderWeekLabel();
+    if (!window.Store.isDemo()) refreshLive().then(render).catch(function (err) { fail(err); });
+    else render();
+  }
+  function shiftWeek(days) {
+    var d = new Date(S.weekStart + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    setWeek(d.toISOString().slice(0, 10));
   }
 
   // Shown instead of misleading empty states when live data never arrived.
@@ -92,17 +132,27 @@
 
   // ---------- personal weekly check-in ----------
   // Scope rule: the member sees ONLY their own tasks (owner_id match).
+  function ring(pct) {
+    var C = 2 * Math.PI * 26, v = pct === null || pct === undefined ? 0 : Math.max(0, Math.min(100, pct));
+    return '<svg class="ring" viewBox="0 0 64 64" aria-hidden="true"><circle class="ring-bg" cx="32" cy="32" r="26"/>' +
+      '<circle class="ring-fg" cx="32" cy="32" r="26" stroke-dasharray="' + C.toFixed(2) + '" stroke-dashoffset="' + (C * (1 - v / 100)).toFixed(2) + '" transform="rotate(-90 32 32)"/></svg>';
+  }
   function weekCards(avg, plannedN, addN, addMin, addNoTime, affectedN) {
-    function card(label, val, hint) {
-      return '<div class="card"><h3>' + label + '</h3><div class="big">' + val + '</div><div class="hint">' + hint + '</div></div>';
+    function stat(label, val, hint, tip) {
+      return '<div class="stat" title="' + esc(tip || '') + '"><div class="stat-label">' + label + '</div>' +
+        '<div class="stat-num">' + val + '</div>' + (hint ? '<div class="stat-hint">' + hint + '</div>' : '') + '</div>';
     }
-    return '<div class="grid cards">' +
-      card('Planned accomplishment', R.fmtPct(avg.percent), 'average across ' + avg.reported + ' reported of ' + avg.count + ' planned' + (avg.unreported ? ' · ' + avg.unreported + ' not yet reported' : '') + '; cancelled excluded') +
-      card('Planned tasks', plannedN, 'in this week\'s scope') +
-      card('Additional tasks', addN, addNoTime ? addNoTime + ' without recorded time' : 'all durations recorded') +
-      card('Additional time', R.fmtH(addMin), 'total of recorded additional-task time only') +
-      card('Plans affected', affectedN, 'documented links only — never assumed') +
-      '</div><p class="kpi-def">The accomplishment % is a simple average of reported completion — not an efficiency score. Read it alongside additional workload, time spent, and documented impacts.</p>';
+    var lead = avg.reported
+      ? avg.reported + ' of ' + avg.count + ' planned reported' + (avg.unreported ? ' · ' + avg.unreported + ' pending' : '')
+      : (avg.count ? 'Nothing reported yet' : 'No planned tasks');
+    return '<div class="stats">' +
+      '<div class="stat lead" title="Simple average of reported completion across planned tasks; cancelled tasks excluded."><div class="stat-label">Accomplished</div>' +
+      '<div class="lead-row"><div><div class="stat-big">' + R.fmtPct(avg.percent) + '</div><div class="stat-hint">' + lead + '</div></div>' + ring(avg.percent) + '</div></div>' +
+      stat('Planned', plannedN, '', 'Planned tasks in this week\'s scope') +
+      stat('Additional', addN, addNoTime ? addNoTime + ' without time' : '', 'Additional tasks this week') +
+      stat('Extra time', R.fmtH(addMin), '', 'Total recorded additional-task time only') +
+      stat('Plans affected', affectedN, '', 'Documented links only — never assumed') +
+      '</div><p class="kpi-def">The % is a simple average of reported completion, not an efficiency score. Read it with additional workload, time and documented impacts.</p>';
   }
 
   function plannedList(wt) {
@@ -157,7 +207,7 @@
   }
 
   function checkinTable(planned, adds) {
-    if (!planned.length) return '<div class="empty">No planned tasks yet this week. Tap “Add Planned Task” below — a title is enough to start.</div>';
+    if (!planned.length) return '<div class="empty">No planned tasks this week. A title is enough to start.</div>';
     return planned.map(function (t) {
       var reported = !(t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined);
       var pct = reported ? Number(t.completion_percent) : 0;
@@ -166,36 +216,41 @@
       var aff = taskAffectors(t.task_id);
       var recorded = aff.length
         ? '<div class="t-meta">Linked: ' + aff.map(function (i) { return esc(taskTitle(i.additional_task_id)); }).join(', ') + '</div>' : '';
+      var chip = statusChip(t, reported, pct);
+      var hasWhy = ex.reason !== 'none' || !!ex.explanation;
       return '<div class="task" data-task="' + esc(t.task_id) + '">' +
-        '<div class="t-title">' + esc(t.title) + '</div>' +
-        '<div class="t-meta">' + (due ? 'Due ' + esc(due) + ' · ' : '') + (reported ? esc(t.completion_percent) + '% reported' : 'Not reported yet') + '</div>' +
-        '<div class="meter" aria-hidden="true"><div style="width:' + pct + '%"></div></div>' +
-        '<div class="t-ctl">' +
+        '<div class="task-top">' +
+        '<div class="task-main"><div class="t-title">' + esc(t.title) + chip + '</div>' +
+        '<div class="t-meta">' + (due ? 'Due ' + esc(fmtDay(due)) + ' · ' : '') + (reported ? esc(t.completion_percent) + '% reported' : 'Not reported yet') + '</div></div>' +
+        '<div class="task-fields">' +
         '<label>% done <input id="wPct_' + esc(t.task_id) + '" type="number" min="0" max="100" step="any" value="' + (reported ? esc(t.completion_percent) : '') + '" placeholder="—"></label>' +
-        '<label>Outcome (for 100%) <input id="wNote_' + esc(t.task_id) + '" placeholder="What was delivered?" style="min-width:150px"></label>' +
+        '<label>Outcome (at 100%) <input id="wNote_' + esc(t.task_id) + '" placeholder="What was delivered?" style="min-width:190px"></label>' +
         '<button class="btn small" data-open="' + esc(t.task_id) + '">Details</button>' +
-        '</div>' +
+        '</div></div>' +
+        '<div class="meter' + (pct >= 100 ? ' done' : '') + '" aria-hidden="true"><div style="width:' + pct + '%"></div></div>' +
+        '<details class="more"' + (hasWhy ? ' open' : '') + '><summary>Reason &amp; notes if incomplete</summary>' +
         '<div class="t-ctl">' +
         '<label>Why incomplete? <select id="wReason_' + esc(t.task_id) + '" data-rsel="' + esc(t.task_id) + '">' + reasonOptions(ex.reason) + '</select></label>' +
-        '<span id="wLinkWrap_' + esc(t.task_id) + '" style="display:' + (ex.reason === 'additional' ? 'inline' : 'none') + '">' +
+        '<span id="wLinkWrap_' + esc(t.task_id) + '" class="t-ctl" style="display:' + (ex.reason === 'additional' ? 'flex' : 'none') + ';margin-top:0">' +
         '<label>Which additional task? <select id="wLink_' + esc(t.task_id) + '">' +
         '<option value="">Choose…</option>' + adds.map(function (a) {
           return '<option value="' + esc(a.task_id) + '"' + (String(ex.linkedId) === String(a.task_id) ? ' selected' : '') + '>' + esc(a.title) + '</option>';
-        }).join('') + '</select></label> ' +
+        }).join('') + '</select></label>' +
         '<label>How did it affect the plan? <select id="wEffect_' + esc(t.task_id) + '">' +
         '<option value="Delayed">It delayed the task</option>' +
         '<option value="Scope Changed">It left less time for the task</option>' +
         '<option value="Paused">It prevented completion</option>' +
         '</select></label></span>' +
         '</div>' +
-        '<div class="t-ctl"><label style="flex:1;min-width:180px">Explanation <input id="wWhy_' + esc(t.task_id) + '" style="width:100%" placeholder="Short explanation (needed when a reason is chosen)" value="' + esc(ex.explanation) + '"></label></div>' +
+        '<div class="t-ctl"><label style="flex:1;min-width:200px">Explanation <input id="wWhy_' + esc(t.task_id) + '" style="width:100%" placeholder="Short explanation (needed when a reason is chosen)" value="' + esc(ex.explanation) + '"></label></div>' +
+        '</details>' +
         recorded +
         '</div>';
     }).join('');
   }
 
   function additionalCards(adds) {
-    if (!adds.length) return '<div class="empty">No additional work recorded this week. If something unexpected comes up, add it here with the time you spent.</div>';
+    if (!adds.length) return '<div class="empty">No additional work this week. Add unplanned work here with the time you spent.</div>';
     return adds.map(function (t) {
       var rel = S.impacts.filter(function (i) { return String(i.additional_task_id) === String(t.task_id); });
       var aff = rel.length
@@ -204,8 +259,11 @@
       var time = (t.actual_minutes === '' || t.actual_minutes === null || t.actual_minutes === undefined)
         ? 'Time not recorded' : R.fmtH(Number(t.actual_minutes));
       var when = (t.created_at || '').slice(0, 10);
-      return '<div class="task"><div class="t-title">' + esc(t.title) + '</div>' +
-        '<div class="t-meta">' + esc(when || 'This week') + ' · ' + esc(time) + '</div>' +
+      var noTime = time === 'Time not recorded';
+      return '<div class="task"><div class="t-title">' + esc(t.title) +
+        ' <span class="chip ' + (noTime ? 'warn' : 'idle') + '">' + esc(time) + '</span>' +
+        (rel.length ? ' <span class="chip info">Affected plan</span>' : '') + '</div>' +
+        '<div class="t-meta">' + esc(when ? fmtDay(when) : 'This week') + '</div>' +
         '<div class="t-meta">Affected planned work? ' + aff + '</div>' +
         '<div class="t-ctl"><button class="btn small" data-open="' + esc(t.task_id) + '">Details</button></div></div>';
     }).join('');
@@ -229,28 +287,37 @@
     var avg = R.averageAccomplishment(wt);
     var time = R.additionalTimeMinutes(wt);
     var affectedN = memberImpacts(S.selectedMember).length;
-    var h = '<div class="panel hero"><p class="muted" style="margin:0">My Week</p><h2>' + esc(m ? m.display_name : S.selectedMember) + '</h2>' +
-      '<p class="muted" style="margin:0">' + (m ? esc(m.role) + ' · ' : '') + esc(S.weekStart) + ' – ' + esc(weekEndOf(S.weekStart)) + ' · Asia/Manila</p></div>';
+    var nm = m ? m.display_name : S.selectedMember;
+    var h = '<div class="hero"><div class="avatar" aria-hidden="true">' + esc(initials(nm)) + '</div>' +
+      '<div class="who"><h2>' + esc(nm) + '</h2><div class="muted">' + (m ? esc(m.role) + ' · ' : '') + 'Week of ' + esc(fmtRange(S.weekStart)) + '</div></div>' +
+      submitChip() + '</div>';
     h += weekCards(avg, planned.length, adds.length, time.totalMinutes, time.withoutTime, affectedN);
-    h += '<div class="panel"><h2>Planned tasks — report % accomplished</h2>' +
-      '<p class="muted">At week\'s end, enter one % per task — any value 0–100. Leave blank what you have not measured yet. An outcome note is asked only at 100%.</p>' +
-      checkinTable(planned, adds) +
-      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="add-planned">+ Add Planned Task</button>' +
-      '<button class="btn" data-act="save-checkin">Save percentages</button></div></div>';
-    h += '<div class="panel"><h2>Additional tasks</h2>' +
-      '<p class="muted">Work added after the plan, with recorded time and documented effects only.</p>' +
-      additionalCards(adds) +
-      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="add-additional">+ Add Additional Task</button></div></div>';
+    h += '<div class="panel"><div class="panel-head"><h2>Planned tasks</h2><div class="row">' +
+      (planned.length ? '<button class="btn" data-act="save-checkin">Save percentages</button>' : '') +
+      '<button class="btn primary" data-act="add-planned">+ Add Planned Task</button></div></div>' +
+      (planned.length ? '<p class="muted">Enter one % per task (0–100). Leave blank what you haven\'t measured yet; an outcome note is asked only at 100%.</p>' : '') +
+      checkinTable(planned, adds) + '</div>';
+    h += '<div class="panel"><div class="panel-head"><h2>Additional tasks</h2>' +
+      '<button class="btn primary" data-act="add-additional">+ Add Additional Task</button></div>' +
+      additionalCards(adds) + '</div>';
     h += '<div class="panel"><h2>Submit weekly accomplishment</h2>' +
+      '<p class="readiness"><strong>' + avg.reported + ' of ' + avg.count + '</strong> planned tasks have a reported %' + (avg.unreported ? ' · ' + avg.unreported + ' still blank' : ' · ready to submit') + '</p>' +
       submitStatusLine() +
       '<p class="muted">Review first, then freeze this week\'s record. Earlier weeks never change; re-submitting updates this week only.</p>' +
       '<div class="row"><button class="btn primary" data-act="submit-weekly">Submit Weekly Accomplishment</button></div>' +
       (submitResult ? '<pre class="report">' + esc(submitResult) + '</pre>' : '') + '</div>';
     h += '<div class="panel"><h2>Documented impacts on planned work</h2><div style="overflow-x:auto">' + impactList() + '</div>' +
       '<div class="row"><button class="btn" data-act="new-impact">+ Link extra work to affected plan</button></div></div>';
+    h += '<div class="savebar" id="savebar" hidden><span><span class="dot"></span> Unsaved percentages</span><div class="row"><button class="btn small" data-act="discard-checkin">Discard</button><button class="btn small primary" data-act="save-checkin">Save percentages</button></div></div>';
     return h;
   }
 
+  function submitChip() {
+    var snap = S.snapshots.filter(function (s) {
+      return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember);
+    })[0];
+    return snap ? '<span class="badge ok">✓ Submitted</span>' : '<span class="badge warn">Not yet submitted</span>';
+  }
   function submitStatusLine() {
     var snap = S.snapshots.filter(function (s) {
       return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember);
@@ -305,7 +372,7 @@
     var timeAll = R.additionalTimeMinutes(wt);
     var impAll = R.summarizeImpacts(memberImpacts('ALL'));
     var h = '<div class="panel"><h2>Team overview <span class="muted">· read-only; members record via My Dashboard</span></h2>' +
-      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). Roles differ, so raw task counts are never treated as equal effort.</p></div>';
+      '<p class="muted">Week of ' + esc(fmtRange(S.weekStart)) + ' (Mon–Sun, Asia/Manila). Roles differ, so raw task counts are never treated as equal effort.</p></div>';
     h += weekCards(avgAll, avgAll.count, timeAll.taskCount, timeAll.totalMinutes, timeAll.withoutTime, impAll.count);
     h += '<div class="panel"><div class="row"><button class="btn primary" data-act="gen-team-report">Generate concise team report</button></div>' +
       '<p class="muted">Opens in Reports — review before export or printing.</p></div>';
@@ -418,10 +485,10 @@
 
   // ---------- render ----------
   function render() {
-    renderBanner(); renderMemberOptions();
+    renderBanner(); renderMemberOptions(); renderWeekLabel();
     document.querySelectorAll('.nav button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
     var el = $('view');
-    if (S.loading) { el.innerHTML = '<div class="panel">Loading…</div>'; return; }
+    if (S.loading) { el.innerHTML = '<div class="skel-hero"><div class="skel c"></div><div class="skel l"></div></div><div class="skel b"></div><div class="skel p"></div><div class="skel p"></div>'; return; }
     var h = '';
     if (view === 'my') h = vMy();
     else if (view === 'additional') h = vAdditional();
@@ -441,11 +508,31 @@
         viewSnapshot(parts[0], parts[1]);
       };
     });
+    // Live feedback while typing a %: meter, chip, and the unsaved-changes bar.
+    document.querySelectorAll('input[id^="wPct_"]').forEach(function (inp) {
+      inp.oninput = function () {
+        var row = inp.closest('.task'); if (!row) return;
+        var v = inp.value === '' ? 0 : Math.max(0, Math.min(100, Number(inp.value) || 0));
+        var bar = row.querySelector('.meter > div'); if (bar) bar.style.width = v + '%';
+        var m = row.querySelector('.meter'); if (m) m.classList.toggle('done', v >= 100);
+        var chip = row.querySelector('.t-title .chip');
+        if (chip && !chip.classList.contains('bad') && !chip.classList.contains('warn')) {
+          var raw = inp.value === '';
+          chip.className = 'chip ' + (v >= 100 ? 'ok' : (!raw && v > 0 ? 'info' : 'idle'));
+          chip.textContent = v >= 100 ? 'Complete' : (!raw && v > 0 ? 'In progress' : 'Not started');
+        }
+        row.classList.add('dirty');
+        var sb = $('savebar'); if (sb) sb.hidden = false;
+      };
+    });
+    document.querySelectorAll('.task select[id^="wReason_"], .task input[id^="wWhy_"], .task input[id^="wNote_"]').forEach(function (el) {
+      el.addEventListener('input', function () { var sb = $('savebar'); if (sb) sb.hidden = false; });
+    });
     // Show the link picker + effect question only when "additional" is chosen.
     document.querySelectorAll('[data-rsel]').forEach(function (sel) {
       sel.onchange = function () {
         var wrap = $('wLinkWrap_' + sel.getAttribute('data-rsel'));
-        if (wrap) wrap.style.display = sel.value === 'additional' ? 'inline' : 'none';
+        if (wrap) wrap.style.display = sel.value === 'additional' ? 'flex' : 'none';
       };
     });
   }
@@ -463,6 +550,10 @@
     else if (a === 'export-csv') exportCsv();
     else if (a === 'print') window.print();
     else if (a === 'snapshot') saveSnapshot();
+    else if (a === 'discard-checkin') render();
+    else if (a === 'week-prev') shiftWeek(-7);
+    else if (a === 'week-next') shiftWeek(7);
+    else if (a === 'week-today') setWeek(new Date().toISOString().slice(0, 10));
     else if (a === 'retry') { S.error = ''; S.errorKind = ''; connectLive(); }
   }
 
@@ -1274,15 +1365,8 @@
       window.AppConfig.setPrefs({ memberId: S.selectedMember });
       render();
     };
-    $('weekInput').value = S.weekStart;
-    $('weekInput').onchange = function (e) {
-      if (!e.target.value) return;
-      S.weekStart = window.Store.monday(e.target.value);
-      e.target.value = S.weekStart;
-      submitResult = ''; lastReport = '';
-      if (!window.Store.isDemo()) refreshLive().then(render).catch(function (err) { fail(err); });
-      else render();
-    };
+    renderWeekLabel();
+    document.querySelectorAll('.weekstep [data-act]').forEach(function (b) { b.onclick = function () { act(b.dataset.act); }; });
     document.querySelectorAll('.nav button').forEach(function (b) {
       b.onclick = function () { view = b.dataset.view; window.AppConfig.setPrefs({ view: view }); render(); };
     });
