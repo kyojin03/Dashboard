@@ -59,6 +59,27 @@ describe('Api request shapes', () => {
   });
 });
 
+describe('error classification (connection vs authorization)', () => {
+  it('FORBIDDEN and key-related NOT_CONFIGURED are auth failures', async () => {
+    const { Api } = loadApi(async () => jsonRes({ ok: true, data: {} }));
+    assert.equal(Api.errorKind({ code: 'FORBIDDEN', message: 'Invalid edit key.' }), 'auth');
+    assert.equal(Api.errorKind({ code: 'NOT_CONFIGURED', message: 'EDIT_KEY is not configured.' }), 'auth');
+    assert.equal(Api.errorKind({ code: 'NOT_CONFIGURED', message: 'ADMIN_KEY is not configured.' }), 'auth');
+  });
+  it('transport, HTML, and unknown errors are connection failures', async () => {
+    const { Api } = loadApi(async () => jsonRes({ ok: true, data: {} }));
+    assert.equal(Api.errorKind({ code: 'BAD_RESPONSE', message: 'x' }), 'connection');
+    assert.equal(Api.errorKind({ code: 'UNKNOWN', message: 'x' }), 'connection');
+    assert.equal(Api.errorKind(new TypeError('fetch failed')), 'connection');
+    assert.equal(Api.errorKind({ code: 'NOT_CONFIGURED', message: 'Live records address is not configured.' }), 'connection');
+  });
+  it('data errors are neither (message shown, no retry, no key prompt)', async () => {
+    const { Api } = loadApi(async () => jsonRes({ ok: true, data: {} }));
+    assert.equal(Api.errorKind({ code: 'VALIDATION', message: 'Title is required.' }), 'other');
+    assert.equal(Api.errorKind({ code: 'DUPLICATE', message: 'x' }), 'other');
+  });
+});
+
 describe('Api failure modes (what the UI shows)', () => {
   it('non-JSON responses reject as BAD_RESPONSE (e.g. login HTML)', async () => {
     const { Api } = loadApi(async () => ({ text: async () => '<!DOCTYPE html><html>' }));

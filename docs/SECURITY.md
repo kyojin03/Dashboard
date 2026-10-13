@@ -6,7 +6,7 @@
 |---|---|
 | View individual dashboard (member selector) | Open — **view filter only, not authentication** |
 | View team dashboard | Open — read-only |
-| Create/update tasks, daily updates, work logs, impacts, snapshots | Requires `EDIT_KEY` (sent per-request, verified server-side; stored in `sessionStorage`, never in source) |
+| Create/update tasks, daily updates, work logs, impacts, snapshots | Requires `EDIT_KEY` (asked at write time, held in tab memory only, verified server-side; never in source) |
 | Roster add/edit, settings save | Requires separate `ADMIN_KEY` |
 | Audit | Every create/update/reassign/deadline-change/completion-change/archive writes to `TaskEvents` with actor + reason |
 
@@ -15,13 +15,13 @@ Edit and admin keys are compared against **Script Properties** on the server. Th
 ## Key transport and storage (audit 2026-10-12, verified in source)
 
 - Keys travel in the **HTTPS POST body** to `script.google.com` (`js/api.js` uses `Content-Type: text/plain` to avoid CORS preflights; transport encryption comes from TLS). They are never placed in URLs, so they do not land in server logs or browser history.
-- Keys are held in **`sessionStorage` (this tab only)**, never `localStorage`, and never written into source, workflow files, or sample config (verified by repo scan — only property *names* appear in docs/code).
-- Any script running on the page can read `sessionStorage`, so the XSS posture matters: all server- and user-supplied strings are HTML-escaped at render (`esc()` in `js/app.js`; verified on banners, tables, dialogs, history, and report preview), and no `innerHTML` path injects raw data. There is no evaluated user input.
+- Keys are held in **page-lifetime JS memory only** — never `localStorage`, `sessionStorage`, source, workflow files, or sample config (verified by repo scan + tests — only property *names* appear in docs/code). Refreshing clears them; the app re-asks at the next write instead of persisting anything.
+- Any script running on the page shares the JS runtime, so the XSS posture matters regardless of storage: all server- and user-supplied strings are HTML-escaped at render (`esc()` in `js/app.js`; verified on banners, tables, dialogs, history, and report preview), and no `innerHTML` path injects raw data. There is no evaluated user input. Memory-only (vs persisted) additionally means a stolen-device or later XSS session cannot replay an old key.
 - The edit key is **not identity**: it authorizes the device/tab, not the person. Member selection never elevates privilege — every mutating action re-checks the key server-side (`tests/audit.test.mjs` pins per-action enforcement), and `TaskEvents` records the claimed actor for later review, not proof of authorship.
 
 ## Limitations stated explicitly
 
-1. **A shared edit key is not identity verification.** Anyone who learns the key can submit edits as any member. Selecting a name proves nothing about who is typing. Mitigations in place: keys never in source, session-only storage, separate admin key, full audit log, reason required for deadline changes and progress reductions, duplicate-submission guards (`task_id`/`update_id`/`work_log_id` uniqueness + same task/day/percent guard).
+1. **A shared edit key is not identity verification.** Anyone who learns the key can submit edits as any member. Selecting a name proves nothing about who is typing. Refreshing the page clears the key, so each tab session re-asks at most once per write flow — this is intentional: without organizational SSO there is no secure way to persist authentication, and the app documents this instead of faking it. Mitigations in place: keys never in source or storage, per-request server verification, separate admin key, full audit log, reason required for deadline changes and progress reductions, duplicate-submission guards (`task_id`/`update_id`/`work_log_id` uniqueness + same task/day/percent guard).
 2. **No true identity without organizational authentication.** A safer option is documented below. Until adopted, treat reports as *staff-attested records*, rotate keys when staff change, and restrict the web-app access setting as tightly as the Workspace plan allows (domain-only if available).
 3. **Anonymous web-app access** (required for public GitHub Pages without Google sign-in) means network-level anonymity; authorization rests entirely on the keys. Do not use this for highly sensitive data.
 

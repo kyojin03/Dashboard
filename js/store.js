@@ -9,7 +9,7 @@
   var SAMPLE = null;
 
   var state = {
-    mode: 'demo', // 'demo' | 'live'
+    mode: 'live', // 'live' (default) | 'demo' (explicit action only)
     members: [],
     tasks: [],
     updates: [],
@@ -21,7 +21,8 @@
     weekStart: monday(new Date()),
     loading: false,
     error: '',
-    connected: false
+    errorKind: '',
+    connected: false // true only after a successful live initLoad
   };
 
   function monday(d) {

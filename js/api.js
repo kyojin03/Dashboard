@@ -45,6 +45,19 @@
     });
   }
 
+  // Classify failures so the UI can tell "can't reach the API" (retryable)
+  // apart from "key rejected" (needs the key prompt). Transport errors carry
+  // no code at all and count as connection failures.
+  function errorKind(err) {
+    var code = (err && err.code) || '';
+    if (code === 'FORBIDDEN') return 'auth';
+    if (code === 'NOT_CONFIGURED') {
+      return /EDIT_KEY|ADMIN_KEY/i.test((err && err.message) || '') ? 'auth' : 'connection';
+    }
+    if (code === 'BAD_RESPONSE' || code === 'UNKNOWN' || code === '') return 'connection';
+    return 'other';
+  }
+
   window.Api = {
     ping: function () { return get('ping'); },
     initLoad: function (p) { return get('initLoad', p || {}); },
@@ -68,6 +81,7 @@
     exportCsv: function (p) { return get('exportCsv', p || {}); },
     getSettings: function () { return get('getSettings'); },
     saveSettings: function (p, adminKey) { return post('saveSettings', p, { adminKey: adminKey }); },
-    isConfigured: function () { return !!window.AppConfig.getApiBase(); }
+    isConfigured: function () { return !!window.AppConfig.getApiBase(); },
+    errorKind: errorKind
   };
 })();

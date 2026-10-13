@@ -24,6 +24,7 @@
     var msg = (err && err.message) || 'Request failed.';
     var code = (err && err.code) || '';
     S.error = (code ? '[' + code + '] ' : '') + msg;
+    S.errorKind = window.Api.errorKind ? window.Api.errorKind(err) : '';
     renderBanner();
     toast('Error: ' + msg);
   }
@@ -47,18 +48,42 @@
   // ---------- banner / header ----------
   function renderBanner() {
     var b = $('banner');
-    var mode = window.Store.isDemo()
-      ? '<strong>DEMO MODE</strong> — labeled sample data for evaluation. Not production data. Connect the API in Config for live data.'
-      : '<strong>LIVE MODE</strong> — connected to the Apps Script backend. Edits require an edit key (session only, never stored in source).';
     var sel = S.selectedMember === 'ALL' ? 'Whole team' : esc(memberName(S.selectedMember));
-    b.className = 'banner' + (window.Store.isDemo() ? ' demo' : '');
-    b.innerHTML = mode + '<br><span class="muted">Viewing: <strong>' + sel + '</strong> · Week starting <strong>' + esc(S.weekStart) + '</strong> (Mon–Sun; working days Mon–Fri, Asia/Manila)</span>' +
-      (S.error ? '<br><span style="color:#b3372f"><strong>Error:</strong> ' + esc(S.error) + '</span>' : '');
+    var scope = '<br><span class="muted">Viewing: <strong>' + sel + '</strong> · Week starting <strong>' + esc(S.weekStart) + '</strong> (Mon–Sun; working days Mon–Fri, Asia/Manila)</span>';
+    if (window.Store.isDemo()) {
+      b.className = 'banner demo';
+      b.innerHTML = '<strong>DEMO MODE</strong> — labeled sample data for evaluation. Not production data.' + scope;
+      return;
+    }
+    if (S.error) {
+      b.className = 'banner error';
+      var retry = S.errorKind === 'connection' ? ' <button class="btn small" data-act="retry">Retry</button>' : '';
+      var hint = S.errorKind === 'auth' ? ' Your key was rejected or is missing — saving will ask for it.' : '';
+      b.innerHTML = '<strong>Live data unavailable.</strong> ' + esc(S.error) + hint + retry + scope;
+      return;
+    }
+    if (!S.connected) {
+      b.className = 'banner';
+      b.innerHTML = 'Connecting to live data…' + scope;
+      return;
+    }
+    b.className = 'banner';
+    b.innerHTML = '<strong>LIVE MODE</strong> — team roster and records load automatically. Saving asks for the edit key (used once, never stored).' + scope;
+  }
+
+  // Shown instead of misleading empty states when live data never arrived.
+  // Demo data is never rendered as a fallback.
+  function offlinePanel() {
+    if (window.Store.isDemo() || S.connected) return '';
+    return '<div class="panel"><h2>Couldn\'t reach the live records</h2>' +
+      '<p>' + esc(S.error || 'The connection failed.') + '</p>' +
+      '<div class="row"><button class="btn primary" data-act="retry">Retry</button></div>' +
+      '<p class="muted">Sample data is never shown automatically. Use Settings → “Use demo mode” only if you explicitly want labeled sample data.</p></div>';
   }
 
   function renderMemberOptions() {
     var sel = $('memberSelect');
-    sel.innerHTML = '<option value="ALL">Whole team (team dashboard)</option>' +
+    sel.innerHTML = '<option value="ALL">Whole team (team overview)</option>' +
       S.members.map(function (m) {
         return '<option value="' + esc(m.member_id) + '"' + (S.selectedMember === m.member_id ? ' selected' : '') + '>' +
           esc(m.display_name) + ' — ' + esc(m.role) + '</option>';
@@ -334,7 +359,7 @@
       '<div class="row"><button class="btn primary" data-act="gen-report">Generate report</button>' +
       '<button class="btn" data-act="export-csv">Export tasks CSV</button>' +
       '<button class="btn" data-act="print">Print / Save PDF</button>' +
-      (window.Store.isDemo() ? '' : '<button class="btn" data-act="snapshot">Save snapshot</button>') + '</div>' +
+      (window.Store.isDemo() || !S.connected ? '' : '<button class="btn" data-act="snapshot">Save snapshot</button>') + '</div>' +
       '<p class="muted">Derived only from stored tasks, daily updates, work logs, and impact records. Incomplete tasks without explanations are flagged as requiring clarification. Review before export.</p>' +
       '<pre class="report" id="reportPre">' + esc(lastReport || 'Press “Generate report” to preview.') + '</pre></div>';
   }
@@ -343,12 +368,13 @@
     var api = window.AppConfig.getApiBase();
     return '<div class="panel"><h2>Connection</h2>' +
       '<div class="form"><label class="full">Apps Script /exec URL<input id="cfgApi" value="' + esc(api) + '" placeholder="https://script.google.com/macros/s/…/exec"></label>' +
-      '<label>Edit key (session only)<input id="cfgEdit" type="password" placeholder="required for saving in live mode"></label>' +
-      '<label>Admin key (session only)<input id="cfgAdmin" type="password" placeholder="required for roster"></label></div>' +
+      '<label>Edit key (this tab’s memory only)<input id="cfgEdit" type="password" placeholder="asked again when saving"></label>' +
+      '<label>Admin key (this tab’s memory only)<input id="cfgAdmin" type="password" placeholder="asked again for roster changes"></label></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="save-config">Save & connect</button>' +
       '<button class="btn" data-act="use-demo">Use demo mode</button>' +
-      '<button class="btn" data-act="ping">Test connection</button></div>' +
-      '<p class="muted">Keys stay in this tab only and are never written into source files. Selecting a name does not identify anyone.</p>' +
+      '<button class="btn" data-act="ping">Test connection</button>' +
+      '<button class="btn" data-act="forget-keys">Forget keys</button></div>' +
+      '<p class="muted">Keys are kept in this tab’s memory only and cleared on refresh — never stored. Saving asks for a key only when needed. Selecting a name does not identify anyone.</p>' +
       '<p class="muted">Mode: <strong>' + (window.Store.isDemo() ? 'DEMO' : 'LIVE') + '</strong> · API: <span class="mono">' + esc(api || '(not set)') + '</span></p></div>' +
       '<div class="panel"><h2>Team roster (' + S.members.length + ' members)</h2><p class="muted">Roster changes need the admin key (authorized users only).</p>' +
       '<table><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th></tr></thead><tbody>' +
@@ -370,7 +396,7 @@
     else if (view === 'reports') h = vReports();
     else if (view === 'settings') h = vSettings();
     else { view = 'my'; h = vMy(); }
-    el.innerHTML = h;
+    el.innerHTML = offlinePanel() + h;
     bindView();
   }
 
@@ -402,6 +428,8 @@
     else if (a === 'save-config') saveConfig();
     else if (a === 'use-demo') { window.Store.enterDemo(); S.error = ''; submitResult = ''; render(); toast('Demo mode enabled.'); }
     else if (a === 'ping') ping();
+    else if (a === 'retry') { S.error = ''; S.errorKind = ''; connectLive(); }
+    else if (a === 'forget-keys') { window.AppConfig.clearKeys(); render(); toast('Keys cleared from this tab\'s memory.'); }
   }
 
   // ---------- weekly check-in: slim dialogs, save, submit ----------
@@ -436,11 +464,13 @@
         render(); toast('Planned task added (demo).');
         return;
       }
-      if (!requireLiveKey()) return;
-      setLoading(true, 'Adding…'); render();
-      window.Api.createTask(p).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Planned task added.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireLiveKey(function (ok) {
+        if (!ok) return;
+        setLoading(true, 'Adding…'); render();
+        window.Api.createTask(p).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Planned task added.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
@@ -504,15 +534,17 @@
         render(); toast('Additional task recorded (demo).');
         return;
       }
-      if (!requireLiveKey()) return;
-      setLoading(true, 'Recording…'); render();
-      window.Api.createTask(task).then(function () {
-        var chain = Promise.resolve();
-        links.forEach(function (l) { chain = chain.then(function () { return window.Api.upsertImpact(l); }); });
-        return chain;
-      }).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Additional task recorded.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireLiveKey(function (ok) {
+        if (!ok) return;
+        setLoading(true, 'Recording…'); render();
+        window.Api.createTask(task).then(function () {
+          var chain = Promise.resolve();
+          links.forEach(function (l) { chain = chain.then(function () { return window.Api.upsertImpact(l); }); });
+          return chain;
+        }).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Additional task recorded.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
@@ -646,19 +678,23 @@
       render(); toast('Saved ' + c.updates.length + ' update(s) (demo).');
       return Promise.resolve({ saved: c.updates.length, errors: c.errors.length });
     }
-    if (!requireLiveKey()) return Promise.resolve({ saved: 0, blocked: true });
-    setLoading(true, 'Saving…'); render();
-    var chain = Promise.resolve();
-    c.updates.forEach(function (u) {
-      var link = u._link; delete u._link;
-      chain = chain.then(function () { return window.Api.updateTask(u); }).then(function () {
-        if (link) return window.Api.upsertImpact(link);
+    return new Promise(function (resolve) {
+      requireLiveKey(function (ok) {
+        if (!ok) { resolve({ saved: 0, blocked: true }); return; }
+        setLoading(true, 'Saving…'); render();
+        var chain = Promise.resolve();
+        c.updates.forEach(function (u) {
+          var link = u._link; delete u._link;
+          chain = chain.then(function () { return window.Api.updateTask(u); }).then(function () {
+            if (link) return window.Api.upsertImpact(link);
+          });
+        });
+        chain.then(function () { return refreshLive(); }).then(function () {
+          setLoading(false); render(); toast('Saved ' + c.updates.length + ' update(s).');
+          resolve({ saved: c.updates.length, errors: c.errors.length });
+        }).catch(function (e) { setLoading(false); render(); fail(e); resolve({ saved: 0, failed: true }); });
       });
     });
-    return chain.then(function () { return refreshLive(); }).then(function () {
-      setLoading(false); render(); toast('Saved ' + c.updates.length + ' update(s).');
-      return { saved: c.updates.length, errors: c.errors.length };
-    }).catch(function (e) { setLoading(false); render(); fail(e); return { saved: 0, failed: true }; });
   }
 
   function saveCheckinUI() {
@@ -768,10 +804,43 @@
     }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
-  function requireLiveKey() {
-    if (window.Store.isDemo()) return true;
-    if (!window.AppConfig.getEditKey()) { toast('Enter the edit key in Settings first (saving is controlled, not open).'); view = 'settings'; render(); return false; }
-    return true;
+  // Write gates. Keys are page-lifetime memory only (never persisted); the
+  // backend re-verifies them on every request. Demo mode needs no key.
+  // Member selection never grants anything — it only scopes the view.
+  // Callbacks always fire exactly once as cb(ok).
+  function askKeyDialog(kind, cb) {
+    var isAdmin = kind === 'admin';
+    var dlg = document.createElement('dialog');
+    dlg.innerHTML = '<h3 style="margin-top:0">' + (isAdmin ? 'Admin key needed' : 'Edit key needed') + '</h3>' +
+      '<p class="muted">' + (isAdmin
+        ? 'Roster changes are restricted to authorized users.'
+        : 'Saving is restricted to authorized editors.') +
+      ' The key is used for this action only, kept in this tab\'s memory, and cleared on refresh — never stored.</p>' +
+      '<div class="form"><label class="full">' + (isAdmin ? 'Admin key' : 'Edit key') + '<input id="kVal" type="password" autocomplete="off"></label></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn primary" id="kGo">Continue</button><button class="btn" id="kCancel">Cancel</button></div>';
+    document.body.appendChild(dlg); dlg.showModal();
+    var input = dlg.querySelector('#kVal');
+    if (input) input.focus();
+    dlg.querySelector('#kCancel').onclick = function () { dlg.close(); dlg.remove(); cb(false); };
+    dlg.querySelector('#kGo').onclick = function () {
+      var v = dlg.querySelector('#kVal').value;
+      if (!v) { toast('Enter the key to continue, or cancel.'); return; }
+      if (isAdmin) window.AppConfig.setAdminKey(v); else window.AppConfig.setEditKey(v);
+      dlg.close(); dlg.remove(); cb(true);
+    };
+  }
+  function requireLiveKey(cb) {
+    if (window.Store.isDemo()) { cb(true); return; }
+    if (!S.connected) { toast('Not connected to the live records — use Retry first.'); cb(false); return; }
+    if (window.AppConfig.getEditKey()) { cb(true); return; }
+    askKeyDialog('edit', cb);
+  }
+  function requireAdminKey(cb) {
+    if (window.Store.isDemo()) { cb(true, ''); return; }
+    if (!S.connected) { toast('Not connected to the live records — use Retry first.'); cb(false, ''); return; }
+    var admin = window.AppConfig.getAdminKey();
+    if (admin) { cb(true, admin); return; }
+    askKeyDialog('admin', function (ok) { cb(ok, ok ? window.AppConfig.getAdminKey() : ''); });
   }
 
   function taskDialog(type, existing) {
@@ -840,14 +909,15 @@
       render(); toast('Saved (demo).');
       return;
     }
-    if (!requireLiveKey()) return;
-    setLoading(true, 'Saving…'); render();
-    var call = existing
-      ? window.Api.updateTask(Object.assign({ task_id: existing.task_id }, payload))
-      : window.Api.createTask(Object.assign({ clientMutationId: window.Store.uid('M') }, payload));
-    call.then(function () { return refreshLive(); })
-      .then(function () { setLoading(false); render(); toast('Saved.'); })
-      .catch(function (e) { setLoading(false); render(); fail(e); });
+    requireLiveKey(function (ok) { if (!ok) return;
+      setLoading(true, 'Saving…'); render();
+      var call = existing
+        ? window.Api.updateTask(Object.assign({ task_id: existing.task_id }, payload))
+        : window.Api.createTask(Object.assign({ clientMutationId: window.Store.uid('M') }, payload));
+      call.then(function () { return refreshLive(); })
+        .then(function () { setLoading(false); render(); toast('Saved.'); })
+        .catch(function (e) { setLoading(false); render(); fail(e); });
+    });
   }
 
   function openTask(id) {
@@ -924,11 +994,12 @@
         render(); toast('Update saved (demo).');
         return;
       }
-      if (!requireLiveKey()) return;
-      setLoading(true, 'Saving update…'); render();
-      window.Api.addDailyUpdate(p).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Update saved.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireLiveKey(function (ok) { if (!ok) return;
+        setLoading(true, 'Saving update…'); render();
+        window.Api.addDailyUpdate(p).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Update saved.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
@@ -959,11 +1030,12 @@
         render(); toast('Effort logged (demo).');
         return;
       }
-      if (!requireLiveKey()) return;
-      setLoading(true, 'Logging effort…'); render();
-      window.Api.addWorkLog(p).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Effort logged.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireLiveKey(function (ok) { if (!ok) return;
+        setLoading(true, 'Logging effort…'); render();
+        window.Api.addWorkLog(p).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Effort logged.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
@@ -973,12 +1045,13 @@
       render(); toast('Archived (demo).');
       return;
     }
-    if (!requireLiveKey()) return;
-    setLoading(true, 'Archiving…'); render();
-    window.Api.archiveTask({ task_id: t.task_id, reason: 'archived from dashboard' })
-      .then(function () { return refreshLive(); })
-      .then(function () { setLoading(false); render(); toast('Archived.'); })
-      .catch(function (e) { setLoading(false); render(); fail(e); });
+    requireLiveKey(function (ok) { if (!ok) return;
+      setLoading(true, 'Archiving…'); render();
+      window.Api.archiveTask({ task_id: t.task_id, reason: 'archived from dashboard' })
+        .then(function () { return refreshLive(); })
+        .then(function () { setLoading(false); render(); toast('Archived.'); })
+        .catch(function (e) { setLoading(false); render(); fail(e); });
+    });
   }
 
   function impactDialog() {
@@ -1008,17 +1081,16 @@
         render(); toast('Impact linked (demo).');
         return;
       }
-      if (!requireLiveKey()) return;
-      setLoading(true, 'Linking…'); render();
-      window.Api.upsertImpact(p).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Impact linked.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireLiveKey(function (ok) { if (!ok) return;
+        setLoading(true, 'Linking…'); render();
+        window.Api.upsertImpact(p).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Impact linked.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
   function memberDialog() {
-    var admin = window.AppConfig.getAdminKey();
-    if (!window.Store.isDemo() && !admin) { toast('Admin key required — enter it in Settings.'); view = 'settings'; render(); return; }
     var dlg = document.createElement('dialog');
     dlg.innerHTML = '<h3 style="margin-top:0">Add team member (admin)</h3><div class="form">' +
       '<label class="full">Display name*<input id="mName"></label>' +
@@ -1035,10 +1107,12 @@
         render(); toast('Member added (demo).');
         return;
       }
-      setLoading(true, 'Saving member…'); render();
-      window.Api.upsertMember(p, admin).then(function () { return refreshLive(); })
-        .then(function () { setLoading(false); render(); toast('Member saved.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+      requireAdminKey(function (ok, admin) { if (!ok) return;
+        setLoading(true, 'Saving member…'); render();
+        window.Api.upsertMember(p, admin).then(function () { return refreshLive(); })
+          .then(function () { setLoading(false); render(); toast('Member saved.'); })
+          .catch(function (e) { setLoading(false); render(); fail(e); });
+      });
     };
   }
 
@@ -1124,11 +1198,24 @@
       .catch(function (e) { setLoading(false); render(); fail(e); });
   }
   function connectLive() {
-    if (!window.AppConfig.getApiBase()) { window.Store.enterDemo(); render(); return; }
-    setLoading(true, 'Connecting to backend…'); render();
+    if (!window.AppConfig.getApiBase()) {
+      S.connected = false;
+      fail({ code: 'NOT_CONFIGURED', message: 'Live records address is not configured.' });
+      render();
+      return;
+    }
+    setLoading(true, 'Loading live records…'); render();
     window.Api.initLoad({ week_start: S.weekStart })
-      .then(function (d) { window.Store.enterLive(d); S.error = ''; setLoading(false); render(); toast('Connected to live backend.'); })
-      .catch(function (e) { setLoading(false); window.Store.enterDemo(); render(); fail(e); });
+      .then(function (d) {
+        window.Store.enterLive(d);
+        // A remembered member that no longer exists falls back to whole team.
+        if (S.selectedMember !== 'ALL' && !S.members.some(function (m) { return m.member_id === S.selectedMember; })) {
+          S.selectedMember = 'ALL';
+        }
+        S.error = ''; S.errorKind = ''; setLoading(false); render();
+      })
+      // No demo fallback: a failed live load stays a visible error with Retry.
+      .catch(function (e) { S.connected = false; setLoading(false); render(); fail(e); });
   }
   function refreshLive() {
     var warnings = [];
@@ -1155,8 +1242,18 @@
 
   // ---------- boot ----------
   function boot() {
-    window.Store.enterDemo();
-    $('memberSelect').onchange = function (e) { S.selectedMember = e.target.value; submitResult = ''; lastReport = ''; render(); };
+    // Restore harmless preferences (member + view only; week always current).
+    // Live mode is the default: connect first, demo only by explicit action.
+    var prefs = window.AppConfig.getPrefs();
+    if (prefs.view === 'my' || prefs.view === 'additional' || prefs.view === 'team' || prefs.view === 'reports' || prefs.view === 'settings') {
+      view = prefs.view;
+    }
+    if (prefs.memberId) S.selectedMember = prefs.memberId; // validated against the roster after load
+    $('memberSelect').onchange = function (e) {
+      S.selectedMember = e.target.value; submitResult = ''; lastReport = '';
+      window.AppConfig.setPrefs({ memberId: S.selectedMember });
+      render();
+    };
     $('weekInput').value = S.weekStart;
     $('weekInput').onchange = function (e) {
       if (!e.target.value) return;
@@ -1166,11 +1263,11 @@
       if (!window.Store.isDemo()) refreshLive().then(render).catch(function (err) { fail(err); });
       else render();
     };
-    document.querySelectorAll('.nav button').forEach(function (b) { b.onclick = function () { view = b.dataset.view; render(); }; });
-    $('settingsLink').onclick = function () { view = 'settings'; render(); };
-    // Auto-connect if an API URL was previously saved
-    if (window.AppConfig.getApiBase()) connectLive();
-    else render();
+    document.querySelectorAll('.nav button').forEach(function (b) {
+      b.onclick = function () { view = b.dataset.view; window.AppConfig.setPrefs({ view: view }); render(); };
+    });
+    $('settingsLink').onclick = function () { view = 'settings'; window.AppConfig.setPrefs({ view: view }); render(); };
+    connectLive();
   }
 
   window.App = { boot: boot, render: render };

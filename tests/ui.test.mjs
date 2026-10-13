@@ -15,6 +15,39 @@ const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const appJs = fs.readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 
+describe('live-first startup (no silent demo fallback)', () => {
+  function fnBody(src, name) {
+    const start = src.indexOf('function ' + name);
+    assert.ok(start !== -1, name + ' must exist');
+    const next = src.indexOf('\n  function ', start + 1);
+    return src.slice(start, next === -1 ? undefined : next);
+  }
+  it('failed live connects never fall back to demo data', () => {
+    const body = fnBody(appJs, 'connectLive');
+    assert.doesNotMatch(body, /enterDemo/);
+    assert.match(body, /S\.connected = false/);
+  });
+  it('demo activates only through the explicit demo action', () => {
+    const uses = [...appJs.matchAll(/\.enterDemo\(\)/g)].length;
+    assert.equal(uses, 1, 'enterDemo must have exactly one caller (use-demo), found ' + uses);
+    assert.ok(appJs.includes("a === 'use-demo'"));
+  });
+  it('write gates ask for the key instead of redirecting to settings', () => {
+    assert.ok(appJs.includes('function askKeyDialog(kind, cb)'));
+    assert.ok(appJs.includes("a === 'retry'"));
+    assert.ok(appJs.includes("a === 'forget-keys'"));
+    assert.ok(!/Enter the edit key in Settings first/.test(appJs), 'old settings-redirect prompt must be gone');
+    assert.ok(!/Admin key required — enter it in Settings/.test(appJs), 'old admin-redirect prompt must be gone');
+  });
+  it('boot restores prefs and always connects live first', () => {
+    const body = fnBody(appJs, 'boot');
+    assert.match(body, /getPrefs/);
+    assert.match(body, /setPrefs/);
+    assert.match(body, /connectLive\(\);/);
+    assert.doesNotMatch(body, /enterDemo/);
+  });
+});
+
 describe('UI wiring consistency', () => {
   it('every data-act button has a handler branch in act()', () => {
     const acts = [...new Set([...appJs.matchAll(/data-act="([^"]+)"/g)].map((m) => m[1]))];

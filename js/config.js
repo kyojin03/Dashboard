@@ -1,17 +1,27 @@
 /**
  * Frontend configuration — Academic Affairs Workload Dashboard.
- * The API URL is NEVER hardcoded with secrets. It resolves in this order:
+ * The API URL is public (not a secret) and ships as the default below, so
+ * the app opens directly in LIVE MODE with no per-browser configuration.
+ * Resolution order:
  *   1. ?api= query parameter (per-link override, not persisted)
- *   2. localStorage 'aa_api_base' (set on the Config screen)
- *   3. window.APP_CONFIG.API_BASE_URL default below (deploy maintainer edits this)
+ *   2. localStorage 'aa_api_base' (manual override from Settings)
+ *   3. window.APP_CONFIG.API_BASE_URL default (deployed endpoint)
  * Base path support: all internal links are relative; API calls use absolute URL.
+ *
+ * Secrets: edit/admin keys are NEVER written to localStorage, sessionStorage,
+ * or any persisted store. They live only in a page-lifetime memory holder
+ * (cleared on refresh) and are sent with individual write requests. Without
+ * organizational SSO there is no secure persistent authentication — this is
+ * documented in docs/SECURITY.md rather than faked.
+ *
+ * Preferences: only non-sensitive UI choices (member, view) persist, in
+ * localStorage 'aa_prefs'. The reporting week always defaults to current.
  */
 window.APP_CONFIG = Object.assign(
   {
-    API_BASE_URL: '', // e.g. 'https://script.google.com/macros/s/AKfyc.../exec'
+    API_BASE_URL: 'https://script.google.com/macros/s/AKfycbz1AO3ntPEc-J9ujfn5NMdosq3zD35f28gMfHxKDZuEeu8cgCm7K_0VQrzysNRyI7U/exec',
     TIMEZONE: 'Asia/Manila',
-    APP_NAME: 'Academic Affairs — Workload Analytics',
-    DEMO_MODE_DEFAULT: true // explicit, labeled demo until a real API is configured
+    APP_NAME: 'Academic Affairs — Weekly Accomplishment Reporting'
   },
   window.APP_CONFIG || {}
 );
@@ -25,6 +35,11 @@ window.APP_CONFIG = Object.assign(
       return '';
     }
   }
+  // Memory-only key holder. Deliberately NOT localStorage/sessionStorage:
+  // persisting secrets there would expose them to any script on the page
+  // across sessions. Page refresh clears these; the app re-asks at write
+  // time instead of pretending a stored key is an identity.
+  var keyCache = { edit: '', admin: '' };
   window.AppConfig = {
     getApiBase: function () {
       var q = queryApi();
@@ -43,22 +58,37 @@ window.APP_CONFIG = Object.assign(
       } catch (e) { /* ignore */ }
     },
     getEditKey: function () {
-      try { return sessionStorage.getItem('aa_edit_key') || ''; } catch (e) { return ''; }
+      return keyCache.edit || '';
     },
     setEditKey: function (k) {
-      try {
-        if (!k) sessionStorage.removeItem('aa_edit_key');
-        else sessionStorage.setItem('aa_edit_key', k);
-      } catch (e) { /* ignore */ }
+      keyCache.edit = k || '';
     },
     getAdminKey: function () {
-      try { return sessionStorage.getItem('aa_admin_key') || ''; } catch (e) { return ''; }
+      return keyCache.admin || '';
     },
     setAdminKey: function (k) {
+      keyCache.admin = k || '';
+    },
+    clearKeys: function () {
+      keyCache.edit = '';
+      keyCache.admin = '';
+    },
+    getPrefs: function () {
       try {
-        if (!k) sessionStorage.removeItem('aa_admin_key');
-        else sessionStorage.setItem('aa_admin_key', k);
-      } catch (e) { /* ignore */ }
+        var raw = localStorage.getItem('aa_prefs');
+        if (!raw) return {};
+        var o = JSON.parse(raw);
+        return (o && typeof o === 'object') ? o : {};
+      } catch (e) { return {}; }
+    },
+    setPrefs: function (p) {
+      try {
+        var cur = {};
+        try { cur = JSON.parse(localStorage.getItem('aa_prefs') || '{}') || {}; } catch (e2) { cur = {}; }
+        if (p.memberId !== undefined) cur.memberId = p.memberId;
+        if (p.view !== undefined) cur.view = p.view;
+        localStorage.setItem('aa_prefs', JSON.stringify(cur));
+      } catch (e) { /* preferences are best-effort only */ }
     }
   };
 })();
