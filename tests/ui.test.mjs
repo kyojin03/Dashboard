@@ -84,3 +84,36 @@ describe('UI wiring consistency', () => {
     }
   });
 });
+
+describe('premium redesign guards', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'css/styles.css'), 'utf8');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  it('Esc-dismissed dialogs clean up instead of lingering', () => {
+    assert.ok(appJs.includes("addEventListener('close'"), 'missing dialog close-cleanup listener');
+  });
+  it('member + key dialogs guard against double submit', () => {
+    assert.ok(appJs.includes("querySelector('#mSave').disabled = true"));
+    assert.ok(appJs.includes("querySelector('#kGo').disabled = true"));
+  });
+  it('nav uses short labels with icons; settings stays secondary', () => {
+    assert.ok(html.includes('<svg viewBox="0 0 24 24"'), 'nav icons missing');
+    assert.ok(!/data-view="settings"/.test(html), 'settings must not be a main nav item');
+    assert.ok(html.includes('id="settingsLink"'));
+  });
+  it('mobile bottom tab bar with safe-area room exists', () => {
+    assert.ok(css.includes('safe-area-inset-bottom'), 'safe-area handling missing');
+    assert.ok(/\.nav\s*\{[^}]*position:\s*fixed/.test(css), 'fixed bottom nav missing');
+  });
+  it('impact list renders as cards, not a dense table', () => {
+    assert.doesNotMatch(appJs, /<table><thead><tr><th>Additional task/);
+  });
+  it('saved-weeks browser + snapshot viewer are wired', () => {
+    assert.ok(appJs.includes('function viewSnapshot(weekStart, memberId)'));
+    assert.ok(appJs.includes('data-snap='));
+    assert.ok(appJs.includes('Saved weeks'));
+  });
+  it('My Week header shows member + full week range', () => {
+    assert.ok(appJs.includes('function weekEndOf(weekStart)'));
+    assert.ok(appJs.includes('My Week</p><h2>') || appJs.includes('>My Week</p>'));
+  });
+});

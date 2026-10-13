@@ -109,6 +109,12 @@
     return wt.filter(function (t) { return t.task_type === 'PLANNED' && t.status !== 'Cancelled'; });
   }
 
+  function weekEndOf(weekStart) {
+    var e = new Date(weekStart + 'T00:00:00Z');
+    e.setUTCDate(e.getUTCDate() + 6);
+    return e.toISOString().slice(0, 10);
+  }
+
   function memberImpacts(memberId) {
     var rel = S.impacts;
     if (memberId !== 'ALL') {
@@ -223,8 +229,8 @@
     var avg = R.averageAccomplishment(wt);
     var time = R.additionalTimeMinutes(wt);
     var affectedN = memberImpacts(S.selectedMember).length;
-    var h = '<div class="panel"><h2>' + esc(m ? m.display_name : S.selectedMember) + (m ? ' <span class="muted">· ' + esc(m.role) + '</span>' : '') + '</h2>' +
-      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). % means deliverable accomplished, not time elapsed.</p></div>';
+    var h = '<div class="panel hero"><p class="muted" style="margin:0">My Week</p><h2>' + esc(m ? m.display_name : S.selectedMember) + '</h2>' +
+      '<p class="muted" style="margin:0">' + (m ? esc(m.role) + ' · ' : '') + esc(S.weekStart) + ' – ' + esc(weekEndOf(S.weekStart)) + ' · Asia/Manila</p></div>';
     h += weekCards(avg, planned.length, adds.length, time.totalMinutes, time.withoutTime, affectedN);
     h += '<div class="panel"><h2>Planned tasks — report % accomplished</h2>' +
       '<p class="muted">At week\'s end, enter one % per task — any value 0–100. Leave blank what you have not measured yet. An outcome note is asked only at 100%.</p>' +
@@ -282,10 +288,12 @@
       rel = rel.filter(function (i) { return ids[i.additional_task_id] || ids[i.affected_task_id]; });
     }
     if (!rel.length) return '<p class="muted">No documented workload impacts. Linking additional work to affected planned tasks is how delays get explained with evidence.</p>';
-    return '<table><thead><tr><th>Additional task</th><th>Affected planned task</th><th>Impact</th><th>Reason</th></tr></thead><tbody>' +
-      rel.map(function (i) {
-        return '<tr><td>' + esc(taskTitle(i.additional_task_id)) + '</td><td>' + esc(taskTitle(i.affected_task_id)) + '</td><td>' + esc(i.impact_type) + '</td><td>' + esc(i.reason || '') + ' <span class="muted">' + esc(i.evidence_notes || '') + '</span></td></tr>';
-      }).join('') + '</tbody></table>';
+    return rel.map(function (i) {
+      return '<div class="task"><div class="t-title">' + esc(taskTitle(i.additional_task_id)) + '</div>' +
+        '<div class="t-meta">Affected: ' + esc(taskTitle(i.affected_task_id)) + ' · ' + esc(i.impact_type) + '</div>' +
+        (i.reason || i.evidence_notes ? '<div class="t-meta">' + esc(i.reason || '') + (i.reason && i.evidence_notes ? ' — ' : '') + esc(i.evidence_notes || '') + '</div>' : '') +
+        '</div>';
+    }).join('');
   }
 
   // ---------- team overview (management, read-only) ----------
@@ -361,7 +369,39 @@
       '<button class="btn" data-act="print">Print / Save PDF</button>' +
       (window.Store.isDemo() || !S.connected ? '' : '<button class="btn" data-act="snapshot">Save snapshot</button>') + '</div>' +
       '<p class="muted">Derived only from stored tasks, daily updates, work logs, and impact records. Incomplete tasks without explanations are flagged as requiring clarification. Review before export.</p>' +
-      '<pre class="report" id="reportPre">' + esc(lastReport || 'Press “Generate report” to preview.') + '</pre></div>';
+      '<pre class="report" id="reportPre">' + esc(lastReport || 'Press “Generate report” to preview.') + '</pre></div>' +
+      '<div class="panel"><h2>Saved weeks</h2>' +
+      '<p class="muted">Frozen records — opening one never changes it. Weeks with nothing submitted are absent here.</p>' +
+      savedWeeksList() + '</div>';
+  }
+
+  function savedWeeksList() {
+    var snaps = (S.snapshots || []).slice().sort(function (a, b) { return String(a.week_start) < String(b.week_start) ? 1 : -1; });
+    if (!snaps.length) return '<div class="empty">No saved weeks yet. Submitting a weekly accomplishment creates a frozen record for that week.</div>';
+    return '<ul class="clean">' + snaps.slice(0, 24).map(function (s) {
+      var who = String(s.member_id) === 'ALL' ? 'Whole team' : memberName(s.member_id);
+      return '<li><strong>' + esc(String(s.week_start).slice(0, 10)) + ' – ' + esc(String(s.week_end || weekEndOf(String(s.week_start).slice(0, 10))).slice(0, 10)) + '</strong>' +
+        ' <span class="muted">' + esc(who) + (s.generated_at ? ' · saved ' + esc(String(s.generated_at).slice(0, 10)) : '') + '</span>' +
+        ' <button class="btn small" data-snap="' + esc(String(s.week_start).slice(0, 10)) + '|' + esc(String(s.member_id)) + '">View</button></li>';
+    }).join('') + '</ul>';
+  }
+
+  // Open a frozen week: live reads the server report for that week+member;
+  // demo rebuilds the text from records without moving the current week.
+  function viewSnapshot(weekStart, memberId) {
+    if (window.Store.isDemo()) {
+      var keepMember = S.selectedMember, keepWeek = S.weekStart;
+      S.weekStart = weekStart; S.selectedMember = memberId;
+      lastReport = memberId === 'ALL' ? teamReportText() : R.buildReportText(reportContext());
+      S.weekStart = keepWeek; S.selectedMember = keepMember;
+      view = 'reports'; render(); toast('Showing the saved week ' + weekStart + '.');
+      return;
+    }
+    if (!S.connected) { toast('Not connected to the live records — use Retry first.'); return; }
+    setLoading(true, 'Opening saved week…'); render();
+    window.Api.weeklyReport({ week_start: weekStart, member_id: memberId }).then(function (r) {
+      lastReport = r.text; setLoading(false); view = 'reports'; render(); toast('Showing the saved week ' + weekStart + '.');
+    }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
   function vSettings() {
@@ -403,6 +443,12 @@
   function bindView() {
     document.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openTask(b.dataset.open); }; });
     document.querySelectorAll('[data-act]').forEach(function (b) { b.onclick = function () { act(b.dataset.act); }; });
+    document.querySelectorAll('[data-snap]').forEach(function (b) {
+      b.onclick = function () {
+        var parts = String(b.dataset.snap).split('|');
+        viewSnapshot(parts[0], parts[1]);
+      };
+    });
     // Show the link picker + effect question only when "additional" is chosen.
     document.querySelectorAll('[data-rsel]').forEach(function (sel) {
       sel.onchange = function () {
@@ -773,9 +819,8 @@
 
   function teamReportText() {
     var wt = weekTasks(S.tasks.filter(function (t) { return !t.archived_at; }));
-    var e = new Date(S.weekStart + 'T00:00:00Z'); e.setUTCDate(e.getUTCDate() + 6);
     var L = ['WEEKLY ACCOMPLISHMENT REPORT — Academic Affairs Team',
-      'Reporting period: ' + S.weekStart + ' to ' + e.toISOString().slice(0, 10) + ' (Asia/Manila, Mon–Sun; working days Mon–Fri).', ''];
+      'Reporting period: ' + S.weekStart + ' to ' + weekEndOf(S.weekStart) + ' (Asia/Manila, Mon–Sun; working days Mon–Fri).', ''];
     S.members.forEach(function (m) {
       var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
       var avg = R.averageAccomplishment(mt);
@@ -825,6 +870,7 @@
     dlg.querySelector('#kGo').onclick = function () {
       var v = dlg.querySelector('#kVal').value;
       if (!v) { toast('Enter the key to continue, or cancel.'); return; }
+      dlg.querySelector('#kGo').disabled = true;
       if (isAdmin) window.AppConfig.setAdminKey(v); else window.AppConfig.setEditKey(v);
       dlg.close(); dlg.remove(); cb(true);
     };
@@ -1101,6 +1147,7 @@
     dlg.querySelector('#mSave').onclick = function () {
       var p = { display_name: dlg.querySelector('#mName').value.trim(), role: dlg.querySelector('#mRole').value, department: 'Academic Affairs' };
       if (!p.display_name) { toast('Name required.'); return; }
+      dlg.querySelector('#mSave').disabled = true;
       dlg.close(); dlg.remove();
       if (window.Store.isDemo()) {
         S.members.push(Object.assign({ member_id: window.Store.uid('M'), is_active: 'TRUE', created_at: new Date().toISOString() }, p));
@@ -1130,10 +1177,9 @@
     var blocked = mine.filter(function (t) { return t.status === 'Blocked'; });
     var needs = pending.filter(function (t) { return !t.blocked_reason && !t.impact_reason && !t.impact_notes; });
     var eff = logs.reduce(function (s, l) { return s + (Number(l.minutes_spent) || 0); }, 0);
-    var e = new Date(S.weekStart + 'T00:00:00Z'); e.setUTCDate(e.getUTCDate() + 6);
     return {
       memberName: S.selectedMember === 'ALL' ? 'Academic Affairs Team' : memberName(S.selectedMember),
-      weekStart: S.weekStart, weekEnd: e.toISOString().slice(0, 10),
+      weekStart: S.weekStart, weekEnd: weekEndOf(S.weekStart),
       planned: planned, additional: additional, completedThisWeek: completedThisWeek,
       pending: pending, overdue: overdue, blocked: blocked, needsClarification: needs,
       effortMinutes: eff, impacts: S.impacts
@@ -1271,5 +1317,9 @@
   }
 
   window.App = { boot: boot, render: render };
+  // Esc-dismissed dialogs clean themselves up instead of lingering hidden.
+  document.addEventListener('close', function (e) {
+    if (e.target && e.target.tagName === 'DIALOG') e.target.remove();
+  }, true);
   document.addEventListener('DOMContentLoaded', boot);
 })();
