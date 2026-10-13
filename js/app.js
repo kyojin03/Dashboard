@@ -1038,6 +1038,7 @@
       '<button class="btn" id="oLog">Log effort</button>' +
       '<button class="btn" id="oEdit">Edit</button>' +
       '<button class="btn danger" id="oDel">Archive</button>' +
+      '<button class="btn danger" id="oKill">Delete forever</button>' +
       '<button class="btn" id="oClose">Close</button></div>' +
       '<p class="muted" id="oHist">Full server history (TaskEvents) loads in live mode.</p>';
     document.body.appendChild(dlg); dlg.showModal();
@@ -1048,6 +1049,10 @@
     dlg.querySelector('#oDel').onclick = function () {
       if (!confirm('Archive this task? Audit history is preserved.')) return;
       dlg.close(); dlg.remove(); archiveTask(t);
+    };
+    dlg.querySelector('#oKill').onclick = function () {
+      if (!confirm('PERMANENTLY delete "' + t.title + '" and ALL its history (updates, logs, impacts)? Snapshots keep old totals. This cannot be undone.')) return;
+      dlg.close(); dlg.remove(); deleteTaskUI(t);
     };
     if (!window.Store.isDemo()) {
       window.Api.taskHistory(id).then(function (h) {
@@ -1148,6 +1153,29 @@
       window.Api.archiveTask({ task_id: t.task_id, reason: 'archived from dashboard' })
         .then(function () { return refreshLive(); })
         .then(function () { setLoading(false); render(); toast('Archived.'); })
+        .catch(function (e) { setLoading(false); render(); fail(e); });
+    });
+  }
+
+  // Permanent delete (open to everyone). Removes the task plus its updates,
+  // logs, and impact links. Snapshots intentionally keep old totals.
+  function deleteTaskUI(t) {
+    if (window.Store.isDemo()) {
+      S.tasks = S.tasks.filter(function (x) { return x.task_id !== t.task_id; });
+      S.updates = S.updates.filter(function (u) { return u.task_id !== t.task_id; });
+      S.workLogs = S.workLogs.filter(function (l) { return l.task_id !== t.task_id; });
+      S.impacts = S.impacts.filter(function (i) { return i.additional_task_id !== t.task_id && i.affected_task_id !== t.task_id; });
+      render(); toast('Permanently deleted (demo).');
+      return;
+    }
+    requireLiveKey(function (ok) { if (!ok) return;
+      setLoading(true, 'Deleting…'); render();
+      window.Api.deleteTask({ task_id: t.task_id, confirm: true })
+        .then(function (r) { return refreshLive().then(function () { return r; }); })
+        .then(function (r) {
+          var n = r && r.removed ? (r.removed.tasks + r.removed.updates + r.removed.logs + r.removed.events + r.removed.impacts) : 1;
+          setLoading(false); render(); toast('Permanently deleted ' + n + ' record(s).');
+        })
         .catch(function (e) { setLoading(false); render(); fail(e); });
     });
   }

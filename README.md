@@ -67,7 +67,7 @@ Count completion = completed eligible ÷ total eligible × 100 (cancelled exclud
 
 ## What is implemented vs. what remains
 - ✅ Data model (8 sheets), backend API (20 actions), locking + idempotency, audit events
-- ✅ Task CRUD, daily updates (history-preserving), work logs, impact links, history view, archive
+- ✅ Task CRUD, daily updates (history-preserving), work logs, impact links, history view, archive + permanent delete (open; snapshots keep old totals)
 - ✅ Individual + team dashboards, filters, turnaround + workload analytics, data-quality flags
 - ✅ Weekly report (personal + team), CSV export, print/PDF layout, idempotent snapshots
 - ✅ Direct live startup with Retry on failure (no silent demo fallback), loading/error/success states

@@ -67,6 +67,7 @@
     createTask: function (p) { return post('createTask', p); },
     updateTask: function (p) { return post('updateTask', p); },
     archiveTask: function (p) { return post('archiveTask', p); },
+    deleteTask: function (p) { return post('deleteTask', p); },
     addDailyUpdate: function (p) { return post('addDailyUpdate', p); },
     listDailyUpdates: function (p) { return get('listDailyUpdates', p || {}); },
     addWorkLog: function (p) { return post('addWorkLog', p); },

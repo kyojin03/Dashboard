@@ -39,5 +39,5 @@ Prior design held keys in page-lifetime memory and sent them in the HTTPS POST b
 
 - The `EDIT_KEY` / `ADMIN_KEY` Script Properties are now unused and can be deleted; leaving them set changes nothing.
 - Never silently fall back to localStorage when the server fails — the app shows an explicit error and keeps the last good state in memory only.
-- Confirm destructive actions (archive) in UI; archival preserves history (rows are flagged, not deleted).
+- Confirm destructive actions in UI: archival preserves history (rows flagged, not deleted); **Delete forever** (task detail dialog) permanently removes the task plus its updates, logs, and impact links after a confirmation prompt — snapshots intentionally keep old totals, and Sheets version history is the only undo.
 - Reads, writes, and CSV exports are all open; the only access boundary left is the web-app "Who has access" setting plus URL obscurity. Prefer domain-restricted access when the Workspace plan allows it, and do not use this for highly sensitive data.

@@ -163,7 +163,7 @@ describe('Code.gs data-integrity guards', () => {
 });
 
 describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
-  const writes = ['createTask', 'updateTask', 'archiveTask', 'addDailyUpdate', 'addWorkLog', 'upsertImpact', 'createSnapshot', 'upsertMember', 'saveSettings'];
+  const writes = ['createTask', 'updateTask', 'archiveTask', 'deleteTask', 'addDailyUpdate', 'addWorkLog', 'upsertImpact', 'createSnapshot', 'upsertMember', 'saveSettings'];
   for (const a of writes) {
     it(`${a} performs no key check (open writes)`, () => {
       assert.doesNotMatch(codeGs, new RegExp(`case '${a}': require(Edit|Admin)_`));
@@ -181,7 +181,7 @@ describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
   it('write actions are blocked over GET', () => {
     const get = fnBody(codeGs, 'doGet');
     assert.match(get, /METHOD_NOT_ALLOWED/);
-    for (const a of [...writes, 'upsertMember', 'saveSettings']) {
+    for (const a of writes) {
       assert.ok(get.includes(`'${a}'`), `doGet must list ${a} as a write action`);
     }
   });
@@ -194,6 +194,36 @@ describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
   it('no embedded key material or token literals', () => {
     assert.doesNotMatch(codeGs, /AKfyc[A-Za-z0-9_-]{10,}/);
     assert.doesNotMatch(codeGs, /AIza[A-Za-z0-9_-]{10,}/);
+  });
+});
+
+describe('Code.gs permanent delete (open, with cleanup)', () => {
+  it('deleteTask is routed under lock with no key gate', () => {
+    assert.match(codeGs, /case 'deleteTask': return withLock_\(function \(\) \{ return deleteTask_\(p\); \}\);/);
+    assert.ok(fnBody(codeGs, 'doGet').includes("'deleteTask'"), 'deleteTask must be POST-only');
+  });
+  it('requires confirm:true and a valid task_id', () => {
+    const body = fnBody(codeGs, 'deleteTask_');
+    assert.match(body, /confirm !== true/);
+    assert.match(body, /NOT_FOUND/);
+  });
+  it('cleans all five stores including both impact endpoints', () => {
+    const body = fnBody(codeGs, 'deleteTask_');
+    for (const t of ["deleteRowsById_('Tasks'", "deleteRowsById_('DailyUpdates'", "deleteRowsById_('WorkLogs'", "deleteRowsById_('TaskEvents'", "deleteRowsById_('TaskImpacts', 'additional_task_id'", "deleteRowsById_('TaskImpacts', 'affected_task_id'"]) {
+      assert.ok(body.includes(t), 'missing cleanup: ' + t);
+    }
+    assert.match(body, /removed/);
+  });
+  it('frontend exposes Delete forever with confirmation and counts', () => {
+    const appJs = fs.readFileSync(path.join(ROOT, 'js/app.js'), 'utf8');
+    assert.ok(appJs.includes('id="oKill"'), 'Delete forever button missing');
+    assert.ok(appJs.includes('function deleteTaskUI(t)'));
+    assert.ok(appJs.includes("window.Api.deleteTask({ task_id: t.task_id, confirm: true })"));
+    assert.ok(appJs.includes('Permanently deleted'));
+  });
+  it('Api client sends deleteTask as POST', () => {
+    const apiJs = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+    assert.ok(apiJs.includes("deleteTask: function (p) { return post('deleteTask', p); }"));
   });
 });
 

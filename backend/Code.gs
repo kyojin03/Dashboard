@@ -77,7 +77,7 @@ function doGet(e) {
   var params = (e && e.parameter) || {};
   var action = params.action || 'ping';
   // GET is read-only: block write actions over GET
-  var WRITE_ACTIONS = ['createTask', 'updateTask', 'archiveTask', 'addDailyUpdate', 'addWorkLog',
+  var WRITE_ACTIONS = ['createTask', 'updateTask', 'archiveTask', 'deleteTask', 'addDailyUpdate', 'addWorkLog',
     'upsertImpact', 'upsertMember', 'createSnapshot', 'saveSettings'];
   if (WRITE_ACTIONS.indexOf(action) !== -1) {
     return jsonOut({ ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST for write actions.' } });
@@ -144,6 +144,7 @@ function route_(action, p, key, adminKey) {
     case 'createTask': return withLock_(function () { return createTask_(p, p._actor || 'editor'); });
     case 'updateTask': return withLock_(function () { return updateTask_(p, p._actor || 'editor'); });
     case 'archiveTask': return withLock_(function () { return archiveTask_(p, p._actor || 'editor'); });
+    case 'deleteTask': return withLock_(function () { return deleteTask_(p); });
     case 'addDailyUpdate': return withLock_(function () { return addDailyUpdate_(p); });
     case 'listDailyUpdates': return querySheet_('DailyUpdates', p);
     case 'addWorkLog': return withLock_(function () { return addWorkLog_(p); });
@@ -528,6 +529,43 @@ function archiveTask_(p, actor) {
   updateRowById_('Tasks', 'task_id', p.task_id, patch);
   event_(p.task_id, cur.owner_id, 'archived', '', '', p.reason || '', actor);
   return { task_id: p.task_id, archived_at: patch.archived_at };
+}
+
+function deleteRowsById_(name, idField, idVal) {
+  var sh = sheet_(name);
+  var hm = headerMap_(name);
+  var last = sh.getLastRow();
+  if (last < 2) return 0;
+  var col = hm.map[idField] + 1;
+  var ids = sh.getRange(2, col, last - 1, 1).getValues();
+  var removed = 0;
+  for (var i = ids.length - 1; i >= 0; i--) {
+    if (String(ids[i][0]) === String(idVal)) {
+      sh.deleteRow(i + 2);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/* Permanent delete — open to everyone, no key gate (owner decision).
+ * Removes the task row plus its DailyUpdates, WorkLogs, TaskEvents, and
+ * TaskImpacts rows (matched on either impact endpoint). WeeklySnapshots are
+ * frozen history and are intentionally left untouched. Requires
+ * confirm:true; there is no undo except Sheets version history. */
+function deleteTask_(p) {
+  if (!p.task_id) throw coded_('VALIDATION', 'task_id is required.');
+  if (p.confirm !== true) throw coded_('VALIDATION', 'Pass confirm:true to permanently delete a task and its history.');
+  var cur = findById_('Tasks', 'task_id', p.task_id);
+  if (!cur) throw coded_('NOT_FOUND', 'Task not found.');
+  var removed = { tasks: 0, updates: 0, logs: 0, events: 0, impacts: 0 };
+  removed.tasks = deleteRowsById_('Tasks', 'task_id', p.task_id);
+  removed.updates = deleteRowsById_('DailyUpdates', 'task_id', p.task_id);
+  removed.logs = deleteRowsById_('WorkLogs', 'task_id', p.task_id);
+  removed.events = deleteRowsById_('TaskEvents', 'task_id', p.task_id);
+  removed.impacts = deleteRowsById_('TaskImpacts', 'additional_task_id', p.task_id) +
+    deleteRowsById_('TaskImpacts', 'affected_task_id', p.task_id);
+  return { task_id: p.task_id, removed: removed };
 }
 
 function queryTasks_(p) {
