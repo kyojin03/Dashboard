@@ -30,5 +30,5 @@
 - [ ] Frontend opens directly in LIVE MODE with no setup prompt; killing the network shows an error banner with Retry (never demo data).
 - [ ] Create a test task → update to 100% with outcome note → history shows events.
 - [ ] Weekly report generates; CSV export downloads; print preview is clean.
-- [ ] `npm test` passes (47/47).
+- [ ] `npm test` passes (113/113).
 - [ ] Live banner shows after connecting; server failures show an error banner with Retry (never silent demo fallback).

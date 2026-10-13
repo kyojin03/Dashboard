@@ -8,7 +8,7 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 - Frontend: `index.html` + `css/` + `js/` (no framework, no `google.script.run`, `fetch()` only)
 - Backend: `backend/Code.gs` (Apps Script, deployed as `/exec`)
 - Database: Google Sheets (8 sheets, stable headers, position-independent reads)
-- Tests: `npm test` — 105 tests, all passing (Node 24: 19 formula/validation + 28 audit regression + 7 personal-dashboard + 18 weekly-process + 10 API-client + 11 UI-wiring + 12 startup-config tests)
+- Tests: `npm test` — 113 tests, all passing (formulas, audit regressions, personal dashboard, weekly process, API client, UI wiring, startup config)
 
 ## Repository layout
 
@@ -63,7 +63,7 @@ Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G
 Count completion = completed eligible ÷ total eligible × 100 (cancelled excluded, planned/additional separate). Weighted = Σ(est × % ÷ 100) ÷ Σ(est) × 100 (tasks without positive estimates excluded and counted). On-time vs original and vs current deadlines (both preserved). Overdue = past current deadline, not completed/cancelled, Asia/Manila date. Same-day = completed on receipt date ÷ completed with timestamps (+ pending count shown). See `docs/METRICS.md` for the full contract.
 
 ## Testing
-`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and open-write mode with validation/locking/audit intact, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging, plus weekly-process tests: week separation, average accomplishment, additional-time totals, Yes/No impact documentation, and prior-week report stability, plus startup tests: default live URL, override priority, memory-only keys, preference persistence, and no-demo-fallback guards. Synthetic data only. **Verified: 105/105 pass.**
+`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and open-write mode with validation/locking/audit intact, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging, plus weekly-process tests: week separation, average accomplishment, additional-time totals, Yes/No impact documentation, and prior-week report stability, plus startup tests: default live URL, override priority, memory-only keys, preference persistence, and no-demo-fallback guards, plus permanent-delete cleanup tests. Synthetic data only. **Verified: 113/113 pass.**
 
 ## What is implemented vs. what remains
 - ✅ Data model (8 sheets), backend API (20 actions), locking + idempotency, audit events
