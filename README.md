@@ -8,7 +8,7 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 - Frontend: `index.html` + `css/` + `js/` (no framework, no `google.script.run`, `fetch()` only)
 - Backend: `backend/Code.gs` (Apps Script, deployed as `/exec`)
 - Database: Google Sheets (8 sheets, stable headers, position-independent reads)
-- Tests: `npm test` — 54 tests, all passing (Node 24: 19 formula/validation + 28 audit regression + 7 personal-dashboard/member-scope tests)
+- Tests: `npm test` — 82 tests, all passing (Node 24: 19 formula/validation + 28 audit regression + 7 personal-dashboard + 18 weekly-process + 6 API-client + 4 UI-wiring tests)
 
 ## Repository layout
 
@@ -46,8 +46,8 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 2. Settings → Pages → Source: **GitHub Actions**.
 3. Open the site → **Config** → paste the `/exec` URL → Save & connect. Distribute edit/admin keys to authorized staff **out of band** (never commit them).
 
-### 3. Daily workflow
-Member selector → week → review planned tasks → update progress + accomplishments → quick-add unexpected work → log effort → link impacts → generate weekly report → export CSV / print PDF.
+### 3. Weekly workflow (minimal entry)
+Member selector → week → add planned tasks (title is enough) → record additional tasks with time + Yes/No effect on plan → enter one % per planned task at week's end (blank = not yet reported, excluded from the average) with optional incomplete reasons (required only when a cause is attributed, with a link for additional-work causes) → review → Submit Weekly Accomplishment (freezes the week's snapshot; earlier weeks never change) → report/CSV/print. No daily updates or time logs required for planned tasks.
 
 ## Team roster (seeded by `setup()`)
 Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G. Asuncion · Kathlyn Kate N. Mauricio · Juhayna M. Sultan · Catherine M. Madriaga · Jemima P. Sarmiento · Piolo B. Bernardino · Perly S. Saldivar · Rhea Duremdes · Jerome Balbuena. Roster is editable via Team admin (admin key required). No duties are pre-invented — users add actual assignments.
@@ -62,7 +62,7 @@ Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G
 Count completion = completed eligible ÷ total eligible × 100 (cancelled excluded, planned/additional separate). Weighted = Σ(est × % ÷ 100) ÷ Σ(est) × 100 (tasks without positive estimates excluded and counted). On-time vs original and vs current deadlines (both preserved). Overdue = past current deadline, not completed/cancelled, Asia/Manila date. Same-day = completed on receipt date ÷ completed with timestamps (+ pending count shown). See `docs/METRICS.md` for the full contract.
 
 ## Testing
-`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, access boundaries, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and per-action key enforcement, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging. Synthetic data only. **Verified: 54/54 pass.**
+`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, access boundaries, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and per-action key enforcement, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging, plus weekly-process tests: week separation, average accomplishment, additional-time totals, Yes/No impact documentation, and prior-week report stability. Synthetic data only. **Verified: 82/82 pass.**
 
 ## What is implemented vs. what remains
 - ✅ Data model (8 sheets), backend API (20 actions), locking + idempotency, audit events

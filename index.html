@@ -3,37 +3,38 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Academic Affairs — Workload Analytics Dashboard</title>
-  <meta name="description" content="Internal workload tracking and analytics for the Academic Affairs team: planned vs additional work, completion, turnaround, impacts, and weekly reports.">
+  <title>My Week — Academic Affairs Workload Reporting</title>
+  <meta name="description" content="Weekly work reporting for the Academic Affairs team: planned tasks, additional work, accomplishments, and team overview.">
   <link rel="stylesheet" href="./css/styles.css">
 </head>
 <body>
   <header class="topbar">
     <div>
-      <h1>Academic Affairs — Workload Analytics</h1>
-      <div class="sub">What was assigned · what extra work came in · what was completed · what explains the rest</div>
+      <h1>Academic Affairs</h1>
+      <div class="sub">Weekly accomplishment reporting</div>
     </div>
     <div class="spacer"></div>
     <div class="actions row">
-      <select id="memberSelect" aria-label="Select member or whole team"></select>
-      <input id="weekInput" type="date" aria-label="Reporting week start (Monday)">
+      <select id="memberSelect" aria-label="Select team member"></select>
+      <input id="weekInput" type="date" aria-label="Reporting week (Monday)">
+      <button class="settings-link" id="settingsLink" type="button" aria-label="Open settings">Settings</button>
     </div>
   </header>
 
   <div class="layout">
-    <nav class="nav" aria-label="Dashboard sections">
-      <button data-view="my">My Dashboard</button>
+    <nav class="nav" aria-label="Main sections">
+      <button data-view="my">My Week</button>
+      <button data-view="additional">Additional Tasks</button>
       <button data-view="team">Team Overview</button>
-      <button data-view="reports">Reports</button>
-      <button data-view="settings">Settings</button>
+      <button data-view="reports">Weekly Reports</button>
     </nav>
     <main class="main">
       <div id="loading" class="banner" style="display:none">Loading…</div>
       <div id="banner" class="banner"></div>
       <div id="view"></div>
       <footer class="muted no-print" style="margin-top:18px">
-        Internal tool. Selecting a name chooses whose work to view — it does not verify identity. Edits need an edit key; roster changes need an admin key.
-        Time zone Asia/Manila · Reporting week Mon–Sun (working days Mon–Fri). See README for deployment, security, and metric definitions.
+        Internal tool. Selecting a name chooses whose work to view — it does not verify identity. Saving needs an edit key; roster changes need an admin key.
+        Time zone Asia/Manila · Reporting week Mon–Sun (working days Mon–Fri).
       </footer>
     </main>
   </div>

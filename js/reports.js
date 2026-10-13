@@ -49,6 +49,7 @@
     planned.forEach(function (t) {
       var est = Number(t.estimated_minutes);
       if (!isFinite(est) || est <= 0) { excl++; return; }
+      if (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) { excl++; return; } // unreported: excluded, disclosed
       var pct = Math.min(100, Math.max(0, Number(t.completion_percent) || 0));
       num += est * pct / 100; den += est;
     });
@@ -85,6 +86,112 @@
     };
   }
   function fmtPct(v) { return v === null || v === undefined ? '—' : v + '%'; }
+  // Average accomplishment % across eligible PLANNED tasks (arithmetic mean
+  // of REPORTED completion_percent). Unreported ('') tasks are EXCLUDED from
+  // the mean and disclosed via `unreported` — never silently counted as 0%.
+  // Returns { percent|null, count, reported, unreported }.
+  function averageAccomplishment(tasks) {
+    var planned = elig(tasks, 'PLANNED');
+    var sum = 0, reported = 0, unreported = 0;
+    planned.forEach(function (t) {
+      if (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) { unreported++; return; }
+      sum += Math.min(100, Math.max(0, Number(t.completion_percent) || 0));
+      reported++;
+    });
+    return { percent: reported ? r1(sum / reported) : null, count: planned.length, reported: reported, unreported: unreported };
+  }
+  // Total time on ADDITIONAL tasks from recorded task durations only
+  // (actual_minutes). Planned-task effort never included. Tasks without a
+  // recorded duration are counted in withoutTime, never invented.
+  function additionalTimeMinutes(tasks) {
+    var adds = (tasks || []).filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled' && !t.archived_at; });
+    var total = 0, withTime = 0, withoutTime = 0;
+    adds.forEach(function (t) {
+      var has = t.actual_minutes !== '' && t.actual_minutes !== null && t.actual_minutes !== undefined;
+      var m = Number(t.actual_minutes);
+      if (has && isFinite(m) && m >= 0) { total += m; withTime++; }
+      else withoutTime++;
+    });
+    return { totalMinutes: total, taskCount: adds.length, withTime: withTime, withoutTime: withoutTime };
+  }
+  // Week scope shared by every view: created, due, or completed in the week,
+  // plus open carryover from earlier weeks. Single implementation so the
+  // check-in, pickers, team view, and reports can never disagree.
+  function scopeWeek(tasks, weekStart) {
+    var s = new Date(weekStart + 'T00:00:00Z');
+    var e = new Date(s); e.setUTCDate(e.getUTCDate() + 6);
+    var start = s.toISOString().slice(0, 10), end = e.toISOString().slice(0, 10);
+    return (tasks || []).filter(function (t) {
+      if (!t || t.archived_at) return false;
+      return inWeek(t.created_at, weekStart) || inWeek(t.current_due_at || t.original_due_at, weekStart) ||
+        inWeek(t.completed_at, weekStart) ||
+        (String(t.created_at || '').slice(0, 10) < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
+    });
+  }
+
+  // Incomplete reasons offered in the Friday check-in. 'none' = no reason
+  // given yet (allowed); any other choice requires an explanation, and
+  // 'additional' additionally requires the linked additional task.
+  var CHECKIN_REASONS = ['none', 'additional', 'waiting', 'time', 'technical', 'other'];
+  var CHECKIN_REASON_LABELS = {
+    none: 'No reason given yet', additional: 'Additional task or urgent assignment',
+    waiting: 'Waiting for information, approval, or another person',
+    time: 'Insufficient time or competing priorities',
+    technical: 'Technical or operational issue', other: 'Other reason'
+  };
+
+  // Pure validation for one check-in row. pct is null when unreported.
+  // Returns { ok, errors[], unreported }.
+  function validateCheckinRow(r) {
+    var errors = [];
+    if (r.pct === null || r.pct === undefined) return { ok: true, errors: errors, unreported: true };
+    if (!isFinite(r.pct) || r.pct < 0 || r.pct > 100) return { ok: false, errors: ['Enter a percentage from 0 to 100.'], unreported: false };
+    if (r.pct === 100) {
+      if (!r.alreadyCompleted && !(r.outcomeNote && String(r.outcomeNote).trim())) {
+        errors.push('Add what was delivered to mark 100% complete.');
+      }
+      return { ok: errors.length === 0, errors: errors, unreported: false };
+    }
+    var reason = r.reason || 'none';
+    if (reason !== 'none') {
+      if (!(r.explanation && String(r.explanation).trim())) errors.push('Explain the delay briefly.');
+      if (reason === 'additional' && !r.linkedId) errors.push('Link the additional task that affected this plan.');
+    }
+    return { ok: errors.length === 0, errors: errors, unreported: false };
+  }
+
+  // Pure validation for an additional→planned impact link. Rejects self-links,
+  // wrong task types, and cross-week relationships (both ends must be in the
+  // reporting week's scope). Returns { ok, errors[] }.
+  function validateImpactLink(additionalTask, plannedTask, weekStart) {
+    var errors = [];
+    if (!additionalTask || !plannedTask) return { ok: false, errors: ['Both tasks are required.'] };
+    if (String(additionalTask.task_id) === String(plannedTask.task_id)) return { ok: false, errors: ['A task cannot affect itself.'] };
+    if (additionalTask.task_type !== 'ADDITIONAL') errors.push('The affecting task must be an additional task.');
+    if (plannedTask.task_type !== 'PLANNED') errors.push('The affected task must be a planned task.');
+    var inScope = function (t) {
+      return inWeek(t.created_at, weekStart) || inWeek(t.current_due_at || t.original_due_at, weekStart) ||
+        inWeek(t.completed_at, weekStart) ||
+        (String(t.created_at || '').slice(0, 10) < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
+    };
+    if (!inScope(additionalTask)) errors.push('The additional task is outside this reporting week.');
+    if (!inScope(plannedTask)) errors.push('The planned task is outside this reporting week.');
+    return { ok: errors.length === 0, errors: errors };
+  }
+  // Documented impact links only — never inferred. Counts byType plus the
+  // recorded reasons for display in reports.
+  function summarizeImpacts(impacts) {
+    var list = impacts || [];
+    var byType = {};
+    var reasons = [];
+    list.forEach(function (i) {
+      byType[i.impact_type || 'Unspecified'] = (byType[i.impact_type || 'Unspecified'] || 0) + 1;
+      if (i.reason || i.evidence_notes) {
+        reasons.push({ additional_task_id: i.additional_task_id, affected_task_id: i.affected_task_id, impact_type: i.impact_type, reason: i.reason || '', evidence_notes: i.evidence_notes || '' });
+      }
+    });
+    return { count: list.length, byType: byType, reasons: reasons };
+  }
   function fmtH(min) {
     if (min === null || min === undefined) return '—';
     var h = Math.floor(min / 60), m = Math.round(min % 60);
@@ -135,5 +242,5 @@
     return L.join('\n');
   }
 
-  window.Reports = { summarize: summarize, turnaround: turnaround, onTimeCompletion: onTimeCompletion, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
+  window.Reports = { summarize: summarize, turnaround: turnaround, onTimeCompletion: onTimeCompletion, averageAccomplishment: averageAccomplishment, additionalTimeMinutes: additionalTimeMinutes, summarizeImpacts: summarizeImpacts, scopeWeek: scopeWeek, validateCheckinRow: validateCheckinRow, validateImpactLink: validateImpactLink, CHECKIN_REASONS: CHECKIN_REASONS, CHECKIN_REASON_LABELS: CHECKIN_REASON_LABELS, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
 })();

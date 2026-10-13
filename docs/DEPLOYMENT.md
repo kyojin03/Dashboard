@@ -15,7 +15,8 @@
 4. **Initialize.** In the editor's function dropdown select `setup` → Run → authorize. This creates `TeamMembers, Tasks, DailyUpdates, WorkLogs, TaskEvents, TaskImpacts, WeeklySnapshots, Settings`, seeds the 11-member roster and default settings. Re-running is safe (no duplicates: roster seeding skips when populated; headers migrate by adding missing columns).
 5. **Deploy.** Deploy → New deployment → type **Web app** → Execute as: **Me** → Who has access: **Anyone** (use domain-restricted access if your Workspace plan offers it) → Deploy → copy the `/exec` URL.
 6. **Update the API without breaking clients.** Deploy → Manage deployments → Edit (new version). The `/exec` URL stays stable.
-7. **Weekly snapshot trigger (optional but recommended).** In Apps Script: Triggers → Add trigger → function `scheduledWeeklySnapshot` → time-driven → every Monday ~06:00 Asia/Manila. The function is **idempotent**: it updates the existing snapshot for the same `week_start + member_id` instead of creating duplicates.
+7. **Backend change 2026-10-13 (unreported default + weighted exclusion).** After pulling the latest `backend/Code.gs`, deploy a **new version** of the existing deployment (same `/exec` URL — no frontend change needed). Until redeployed, new tasks default to 0% (reported-zero interpretation) and weighted completion counts them at 0. No sheet migration needed: no columns added; `ensureSchema_()` is additive-only and `setup()` never deletes data.
+8. **Weekly snapshot trigger (optional but recommended).** In Apps Script: Triggers → Add trigger → function `scheduledWeeklySnapshot` → time-driven → every Monday ~06:00 Asia/Manila. The function is **idempotent**: it updates the existing snapshot for the same `week_start + member_id` instead of creating duplicates.
 
 ## B. GitHub Pages frontend
 

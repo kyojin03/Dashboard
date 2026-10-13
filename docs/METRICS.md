@@ -10,6 +10,11 @@ Eligible = not `Cancelled`, not archived. Planned and additional are always meas
 ## A. Count-based completion
 `completed eligible ÷ total eligible × 100`. Cancelled excluded from both numerator and denominator; reported separately (visible via status filter). Weekly scope distinguishes **assigned this week** (`created_at` in week) from **carried over** (created before week, still open) — carryover stays visible but is never counted as newly assigned, and a task is never counted twice in one denominator.
 
+## A2. Average planned-task accomplishment (primary Friday metric)
+Mean of **reported** percentages across eligible planned tasks: `Σ reported % ÷ number reported`. Each included task contributes equally. Unreported tasks (`completion_percent` empty) are **excluded and disclosed** ("average across 4 reported of 5 planned · 1 not yet reported") — never silently 0%. Reported 0% IS included as zero. No planned tasks (or none reported) → `—`, never division by zero. Cancelled/archived excluded.
+
+## A3. Reported vs unreported (2026-10-13 change)
+New tasks default to empty (unreported) until the Friday check-in writes an explicit 0–100. Rows created before this change keep stored `0` (treated as reported zero). Weighted completion likewise excludes unreported tasks from numerator and denominator and counts them as excluded. Requires an Apps Script redeploy (new version, same `/exec` URL) to take effect.
 ## B. Effort-weighted completion
 `Σ(estimated_minutes × completion_percent ÷ 100) ÷ Σ(estimated_minutes) × 100`. Tasks without a valid positive estimate are **excluded and the excluded count is disclosed** in the UI and API. Estimates are never invented.
 
@@ -29,6 +34,8 @@ Per task: received (`created_at`), started (`started_at` when known), completed 
 - Received/completed per day maps; pending aging list; average actual effort per completed task with sample size.
 - Missing timestamps → `incompleteData` flag; elapsed and working-time views where start/end or logs exist. Nights/weekends/waiting are not silently counted as active work.
 
+## G2. Friday incomplete reasons (2026-10-13)
+Reason choices: none (default, allowed) · additional task · waiting · insufficient time · technical · other. Any chosen cause requires a short explanation; `additional` additionally requires the linked additional task (same reporting week, validated both client- and server-side) and an effect choice (delayed / less time / prevented). Storage: category label → `Tasks.impact_reason`, explanation → `Tasks.impact_notes`, links → `TaskImpacts` rows (created only on explicit Yes). 100% tasks take no incomplete reason. Hours alone never create a link.
 ## G. Impacts
 `TaskImpacts` links one `ADDITIONAL` task → one affected planned task with `impact_type` (`No Impact, Delayed, Paused, Scope Changed, Dependency Affected`), estimated/actual delay minutes, reason, and evidence notes. **Actual delay is recorded, never auto-derived from additional-task duration.** The weekly impact summary lists delayed/paused originals, linked additional tasks, actual effort, recorded delays, items awaiting clarification, and recurring-interruption patterns — without inferring causation from correlation.
 

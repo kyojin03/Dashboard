@@ -3,8 +3,8 @@
   var S = window.Store.state;
   var R = window.Reports;
   var view = 'my';
-  var filters = { status: '', type: '', priority: '', q: '' };
   var lastReport = '';
+  var submitResult = '';
 
   function $ (id) { return document.getElementById(id); }
   function esc(s) {
@@ -38,11 +38,7 @@
     return t;
   }
   function weekTasks(tasks) {
-    return tasks.filter(function (t) {
-      return R.inWeek(t.created_at, S.weekStart) || R.inWeek(t.current_due_at || t.original_due_at, S.weekStart) ||
-        R.inWeek(t.completed_at, S.weekStart) ||
-        (String(t.created_at || '').slice(0, 10) < S.weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
-    });
+    return R.scopeWeek(tasks, S.weekStart);
   }
   function weekLogs() {
     return S.workLogs.filter(function (l) { return R.inWeek(l.work_date || l.created_at, S.weekStart); });
@@ -69,132 +65,183 @@
       }).join('');
   }
 
-  // ---------- summary cards ----------
-  function cardsHTML(sum, ta) {
+  // ---------- personal weekly check-in ----------
+  // Scope rule: the member sees ONLY their own tasks (owner_id match).
+  function weekCards(avg, plannedN, addN, addMin, addNoTime, affectedN) {
     function card(label, val, hint) {
       return '<div class="card"><h3>' + label + '</h3><div class="big">' + val + '</div><div class="hint">' + hint + '</div></div>';
     }
     return '<div class="grid cards">' +
-      card('Planned tasks', sum.plannedCount, sum.plannedCompleted + ' completed') +
-      card('Planned completion', R.fmtPct(sum.plannedCompletion), 'completed / eligible × 100; cancelled excluded') +
-      card('Weighted completion', R.fmtPct(sum.weightedCompletion), sum.weightedExcluded + ' task(s) without estimates excluded') +
-      card('Additional received', sum.additionalCount, sum.additionalCompleted + ' completed') +
-      card('Additional effort', R.fmtH(sum.additionalEffortMinutes), 'actual minutes on additional work') +
-      card('Overdue', sum.overdueCount, 'past current deadline, not completed/cancelled') +
-      card('Blocked', sum.blockedCount, 'status = Blocked') +
-      card('Turnaround (median)', ta.medianHours === null ? '—' : ta.medianHours + 'h', 'additional tasks; same-day ' + R.fmtPct(ta.sameDayRate)) +
-      '</div><p class="kpi-def">Definitions: count completion = completed eligible ÷ total eligible × 100. Weighted = Σ(estimate × % ÷ 100) ÷ Σ(estimate) × 100. Overdue respects Asia/Manila calendar date. Same-day = completed on receipt date ÷ completed with timestamps (' + ta.sameDay + '/' + ta.sameDayDen + '). Incomplete timestamps are flagged, never invented.</p>';
+      card('Planned accomplishment', R.fmtPct(avg.percent), 'average across ' + avg.reported + ' reported of ' + avg.count + ' planned' + (avg.unreported ? ' · ' + avg.unreported + ' not yet reported' : '') + '; cancelled excluded') +
+      card('Planned tasks', plannedN, 'in this week\'s scope') +
+      card('Additional tasks', addN, addNoTime ? addNoTime + ' without recorded time' : 'all durations recorded') +
+      card('Additional time', R.fmtH(addMin), 'total of recorded additional-task time only') +
+      card('Plans affected', affectedN, 'documented links only — never assumed') +
+      '</div><p class="kpi-def">The accomplishment % is a simple average of reported completion — not an efficiency score. Read it alongside additional workload, time spent, and documented impacts.</p>';
   }
 
-  // ---------- task table ----------
-  function taskRows(tasks) {
-    var f = filters;
-    return tasks.filter(function (t) {
-      if (f.status && t.status !== f.status) return false;
-      if (f.type && t.task_type !== f.type) return false;
-      if (f.priority && t.priority !== f.priority) return false;
-      if (f.q && String(t.title + ' ' + (t.description || '')).toLowerCase().indexOf(f.q.toLowerCase()) === -1) return false;
-      return true;
-    });
-  }
-  function taskTable(tasks) {
-    var rows = taskRows(tasks);
-    if (!rows.length) return '<div class="empty">No tasks match. Add a planned task or quick-add unexpected work below.</div>';
-    var h = '<div style="overflow-x:auto"><table><thead><tr><th>Task</th><th>Type</th><th>Owner</th><th>Status</th><th>Progress</th><th>Due</th><th>Effort</th><th></th></tr></thead><tbody>';
-    rows.forEach(function (t) {
-      var due = esc((t.current_due_at || t.original_due_at || '').slice(0, 10));
-      var od = t.original_due_at && t.current_due_at && t.original_due_at !== t.current_due_at
-        ? '<br><span class="muted">orig ' + esc(String(t.original_due_at).slice(0, 10)) + '</span>' : '';
-      h += '<tr><td><strong>' + esc(t.title) + '</strong><br><span class="muted">' + esc((t.description || '').slice(0, 120)) + '</span></td>' +
-        '<td><span class="pill ' + esc(t.task_type.toLowerCase()) + '">' + esc(t.task_type) + '</span></td>' +
-        '<td>' + esc(memberName(t.owner_id)) + '</td>' +
-        '<td><span class="pill ' + esc(t.status.toLowerCase().replace(/ /g, '')) + '">' + esc(t.status) + '</span>' +
-        (t.status === 'Blocked' && t.blocked_reason ? '<br><span class="muted">' + esc(t.blocked_reason) + '</span>' : '') + '</td>' +
-        '<td><div class="progress"><div style="width:' + Number(t.completion_percent || 0) + '%"></div></div><span class="muted">' + esc(t.completion_percent) + '%</span></td>' +
-        '<td>' + due + od + '</td>' +
-        '<td class="muted">est ' + esc(t.estimated_minutes === '' ? '—' : t.estimated_minutes) + 'm<br>act ' + esc(t.actual_minutes === '' ? '—' : t.actual_minutes) + 'm</td>' +
-        '<td><button class="btn small" data-open="' + esc(t.task_id) + '">Open</button></td></tr>';
-    });
-    return h + '</tbody></table></div>';
+  function plannedList(wt) {
+    return wt.filter(function (t) { return t.task_type === 'PLANNED' && t.status !== 'Cancelled'; });
   }
 
-  // ---------- personal dashboard ----------
-  function ageDays(iso) {
-    if (!iso) return null;
-    var ms = Date.now() - new Date(iso).getTime();
-    if (!isFinite(ms) || ms < 0) return 0;
-    return Math.round(ms / 86400000);
-  }
-
-  function myCards(sum, ot, ta) {
-    function card(label, val, hint) {
-      return '<div class="card"><h3>' + label + '</h3><div class="big">' + val + '</div><div class="hint">' + hint + '</div></div>';
+  function memberImpacts(memberId) {
+    var rel = S.impacts;
+    if (memberId !== 'ALL') {
+      var ids = {};
+      S.tasks.filter(function (t) { return t.owner_id === memberId; }).forEach(function (t) { ids[t.task_id] = true; });
+      rel = rel.filter(function (i) { return ids[i.additional_task_id] || ids[i.affected_task_id]; });
     }
-    return '<div class="grid cards">' +
-      card('Task completion', R.fmtPct(sum.plannedCompletion), sum.plannedCompleted + ' of ' + sum.plannedCount + ' planned done') +
-      card('Weighted completion', R.fmtPct(sum.weightedCompletion), sum.weightedExcluded + ' without estimates excluded') +
-      card('On-time (original)', R.fmtPct(ot.original.percent), ot.original.onTime + ' of ' + ot.original.total + ' by original deadline') +
-      card('On-time (current)', R.fmtPct(ot.current.percent), ot.current.onTime + ' of ' + ot.current.total + ' by approved deadline') +
-      card('Additional work', sum.additionalCompleted + '/' + sum.additionalCount, R.fmtH(sum.additionalEffortMinutes) + ' actual effort') +
-      card('Turnaround (median)', ta.medianHours === null ? '—' : ta.medianHours + 'h', 'same-day ' + R.fmtPct(ta.sameDayRate) + ' (' + ta.sameDay + '/' + ta.sameDayDen + ')') +
-      card('Pending', sum.plannedCount - sum.plannedCompleted + sum.additionalCount - sum.additionalCompleted, 'open tasks needing work') +
-      card('Blocked', sum.blockedCount, 'waiting on something else') +
-      '</div><p class="kpi-def">No single number here is an efficiency score. Completion sits alongside on-time delivery, additional workload, turnaround, pending work, and blockers — read them together. Empty data shows —, never 0%.</p>';
+    return rel;
   }
 
-  function pendingPanel(wt) {
-    var open = wt.filter(function (t) { return t.status !== 'Completed' && t.status !== 'Cancelled'; });
-    var blocked = wt.filter(function (t) { return t.status === 'Blocked'; });
-    var noReason = open.filter(function (t) { return !t.blocked_reason && !t.impact_reason && !t.impact_notes; });
-    function row(t) {
-      var due = (t.current_due_at || t.original_due_at || '').slice(0, 10) || 'no deadline';
-      var age = ageDays(t.created_at);
-      return '<tr><td><strong>' + esc(t.title) + '</strong> <span class="pill ' + esc(String(t.task_type).toLowerCase()) + '">' + esc(t.task_type) + '</span></td>' +
-        '<td>' + esc(t.status) + ' · ' + esc(t.completion_percent) + '%</td>' +
-        '<td>' + esc(due) + (t.original_due_at && t.current_due_at && t.original_due_at !== t.current_due_at ? '<br><span class="muted">was ' + esc(String(t.original_due_at).slice(0, 10)) + '</span>' : '') + '</td>' +
-        '<td class="muted">' + (age === null ? '—' : age + 'd old') + '</td>' +
-        '<td>' + esc(t.blocked_reason || t.impact_notes || '') + '</td>' +
-        '<td><button class="btn small" data-open="' + esc(t.task_id) + '">Open</button></td></tr>';
+  // Reason + link state already on record, so the form opens pre-filled and
+  // saving an untouched row writes nothing.
+  function existingCheckin(t) {
+    var links = S.impacts.filter(function (i) { return String(i.affected_task_id) === String(t.task_id); });
+    var labels = R.CHECKIN_REASON_LABELS;
+    var reason = 'none', explanation = '';
+    if (links.length) {
+      reason = 'additional';
+      explanation = links[0].reason || links[0].evidence_notes || '';
+    } else if (t.impact_reason) {
+      reason = 'other';
+      for (const k of Object.keys(labels)) { if (labels[k] === t.impact_reason) reason = k; }
+      explanation = t.impact_notes || t.blocked_reason || '';
+    } else if (t.blocked_reason) {
+      reason = 'other';
+      explanation = t.blocked_reason;
     }
-    var h = '<div class="panel"><h2>Pending work (' + open.length + ')</h2>';
-    h += open.length ? '<div style="overflow-x:auto"><table><thead><tr><th>Task</th><th>Progress</th><th>Deadline</th><th>Age</th><th>Reason / notes</th><th></th></tr></thead><tbody>' +
-      open.map(row).join('') + '</tbody></table></div>' : '<div class="empty">Nothing pending — nice. Add next week\'s planned tasks when ready.</div>';
-    h += blocked.length ? '<h2 style="margin-top:14px">Blocked (' + blocked.length + ')</h2><ul>' +
-      blocked.map(function (t) { return '<li><strong>' + esc(t.title) + '</strong> — ' + esc(t.blocked_reason || 'reason not recorded yet; open the task and add one.'); }).join('') + '</ul>' : '';
-    h += noReason.length ? '<p class="muted">' + noReason.length + ' open task(s) still need a delay reason — flagged as requiring clarification in the weekly report.</p>' : '';
-    return h + '</div>';
+    return { reason: reason, linkedId: links.length ? links[0].additional_task_id : '', explanation: explanation };
+  }
+
+  function taskAffectors(taskId) {
+    return S.impacts.filter(function (i) { return String(i.affected_task_id) === String(taskId); });
+  }
+
+  function reasonOptions(selected) {
+    var L = R.CHECKIN_REASON_LABELS;
+    return R.CHECKIN_REASONS.map(function (v) {
+      return '<option value="' + v + '"' + (selected === v ? ' selected' : '') + '>' + esc(L[v]) + '</option>';
+    }).join('');
+  }
+
+  function checkinTable(planned, adds) {
+    if (!planned.length) return '<div class="empty">No planned tasks yet this week. Tap “Add Planned Task” below — a title is enough to start.</div>';
+    return planned.map(function (t) {
+      var reported = !(t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined);
+      var pct = reported ? Number(t.completion_percent) : 0;
+      var due = (t.current_due_at || t.original_due_at || '').slice(0, 10);
+      var ex = existingCheckin(t);
+      var aff = taskAffectors(t.task_id);
+      var recorded = aff.length
+        ? '<div class="t-meta">Linked: ' + aff.map(function (i) { return esc(taskTitle(i.additional_task_id)); }).join(', ') + '</div>' : '';
+      return '<div class="task" data-task="' + esc(t.task_id) + '">' +
+        '<div class="t-title">' + esc(t.title) + '</div>' +
+        '<div class="t-meta">' + (due ? 'Due ' + esc(due) + ' · ' : '') + (reported ? esc(t.completion_percent) + '% reported' : 'Not reported yet') + '</div>' +
+        '<div class="meter" aria-hidden="true"><div style="width:' + pct + '%"></div></div>' +
+        '<div class="t-ctl">' +
+        '<label>% done <input id="wPct_' + esc(t.task_id) + '" type="number" min="0" max="100" step="any" value="' + (reported ? esc(t.completion_percent) : '') + '" placeholder="—"></label>' +
+        '<label>Outcome (for 100%) <input id="wNote_' + esc(t.task_id) + '" placeholder="What was delivered?" style="min-width:150px"></label>' +
+        '<button class="btn small" data-open="' + esc(t.task_id) + '">Details</button>' +
+        '</div>' +
+        '<div class="t-ctl">' +
+        '<label>Why incomplete? <select id="wReason_' + esc(t.task_id) + '" data-rsel="' + esc(t.task_id) + '">' + reasonOptions(ex.reason) + '</select></label>' +
+        '<span id="wLinkWrap_' + esc(t.task_id) + '" style="display:' + (ex.reason === 'additional' ? 'inline' : 'none') + '">' +
+        '<label>Which additional task? <select id="wLink_' + esc(t.task_id) + '">' +
+        '<option value="">Choose…</option>' + adds.map(function (a) {
+          return '<option value="' + esc(a.task_id) + '"' + (String(ex.linkedId) === String(a.task_id) ? ' selected' : '') + '>' + esc(a.title) + '</option>';
+        }).join('') + '</select></label> ' +
+        '<label>How did it affect the plan? <select id="wEffect_' + esc(t.task_id) + '">' +
+        '<option value="Delayed">It delayed the task</option>' +
+        '<option value="Scope Changed">It left less time for the task</option>' +
+        '<option value="Paused">It prevented completion</option>' +
+        '</select></label></span>' +
+        '</div>' +
+        '<div class="t-ctl"><label style="flex:1;min-width:180px">Explanation <input id="wWhy_' + esc(t.task_id) + '" style="width:100%" placeholder="Short explanation (needed when a reason is chosen)" value="' + esc(ex.explanation) + '"></label></div>' +
+        recorded +
+        '</div>';
+    }).join('');
+  }
+
+  function additionalCards(adds) {
+    if (!adds.length) return '<div class="empty">No additional work recorded this week. If something unexpected comes up, add it here with the time you spent.</div>';
+    return adds.map(function (t) {
+      var rel = S.impacts.filter(function (i) { return String(i.additional_task_id) === String(t.task_id); });
+      var aff = rel.length
+        ? rel.map(function (i) { return 'Yes — ' + esc(taskTitle(i.affected_task_id)) + ': ' + esc(i.reason || i.evidence_notes || i.impact_type); }).join(' ')
+        : 'No — no impact recorded.';
+      var time = (t.actual_minutes === '' || t.actual_minutes === null || t.actual_minutes === undefined)
+        ? 'Time not recorded' : R.fmtH(Number(t.actual_minutes));
+      var when = (t.created_at || '').slice(0, 10);
+      return '<div class="task"><div class="t-title">' + esc(t.title) + '</div>' +
+        '<div class="t-meta">' + esc(when || 'This week') + ' · ' + esc(time) + '</div>' +
+        '<div class="t-meta">Affected planned work? ' + aff + '</div>' +
+        '<div class="t-ctl"><button class="btn small" data-open="' + esc(t.task_id) + '">Details</button></div></div>';
+    }).join('');
   }
 
   function vMy() {
     if (S.selectedMember === 'ALL') {
       return '<div class="panel"><h2>Whose work are you recording?</h2>' +
-        '<p>Select your name at the top to open your personal dashboard — your tasks, your progress, your weekly report.</p>' +
+        '<p>Select your name at the top to open your personal weekly dashboard.</p>' +
         '<p class="muted">Selecting a name only chooses what to view. It does not prove who you are; saving still needs the edit key.</p></div>' +
-        '<div class="panel"><h2>How it works</h2><ol>' +
-        '<li>Add your <strong>planned tasks</strong> at the start of the week (title + deadline is enough).</li>' +
-        '<li>During the week, <strong>quick-add unexpected work</strong> as additional tasks.</li>' +
-        '<li>Update <strong>progress + accomplishments</strong> daily; log effort; note blockers.</li>' +
-        '<li>Link extra work to any planned task it delayed, with a reason.</li>' +
-        '<li>Generate your <strong>weekly accomplishment report</strong> from the records.</li></ol></div>';
+        '<div class="panel"><h2>How the week works</h2><ol>' +
+        '<li>Add your <strong>planned tasks</strong> at the start of the week (title is enough).</li>' +
+        '<li>During the week, record <strong>additional tasks</strong> with time spent and whether they affected your plan.</li>' +
+        '<li>At week\'s end, enter one <strong>% accomplished</strong> per planned task — nothing else required.</li>' +
+        '<li>Press <strong>Submit Weekly Accomplishment</strong> to freeze the week\'s record (earlier weeks never change).</li></ol></div>';
     }
     var m = S.members.filter(function (x) { return x.member_id === S.selectedMember; })[0];
     var wt = weekTasks(scopedTasks());
-    var sum = R.summarize(wt, weekLogs());
-    var ot = R.onTimeCompletion(wt);
-    var ta = R.turnaround(wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
-    var daily = S.updates.filter(function (u) { return R.inWeek(u.update_date, S.weekStart) && u.member_id === S.selectedMember; });
+    var planned = plannedList(wt);
+    var adds = wt.filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
+    var avg = R.averageAccomplishment(wt);
+    var time = R.additionalTimeMinutes(wt);
+    var affectedN = memberImpacts(S.selectedMember).length;
     var h = '<div class="panel"><h2>' + esc(m ? m.display_name : S.selectedMember) + (m ? ' <span class="muted">· ' + esc(m.role) + '</span>' : '') + '</h2>' +
-      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). Progress measures deliverables achieved, not time elapsed.</p></div>';
-    h += myCards(sum, ot, ta);
-    h += '<div class="panel"><h2>My tasks (' + wt.length + ' this week)</h2>' + filterBar() + taskTable(wt) + quickAddButtons() + '</div>';
-    h += '<div class="panel"><h2>Daily accomplishments</h2>' + (daily.length ? '<table><thead><tr><th>Date</th><th>Task</th><th>Progress</th><th>What got done</th><th>Blockers</th></tr></thead><tbody>' +
-      daily.map(function (u) {
-        return '<tr><td>' + esc(u.update_date) + '</td><td>' + esc(taskTitle(u.task_id)) + '</td><td>' + esc(u.previous_percent) + '% → ' + esc(u.new_percent) + '%</td><td>' + esc(u.accomplishment_notes || '') + (u.remaining_work ? '<br><span class="muted">Next: ' + esc(u.remaining_work) + '</span>' : '') + '</td><td>' + esc(u.blocker_notes || '') + '</td></tr>';
-      }).join('') + '</tbody></table>' : '<div class="empty">No updates yet this week. Open a task → “Add daily update” — it takes seconds and builds your weekly report.</div>') + '</div>';
-    h += pendingPanel(wt);
-    h += '<div class="panel"><h2>Extra work vs plan</h2><p class="muted">When additional work delays a planned task, link them with a reason — that link (not the hours alone) is what explains the delay.</p>' + impactList() +
-      '<div class="row"><button class="btn primary" data-act="new-impact">+ Link extra work to affected plan</button></div></div>';
+      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). % means deliverable accomplished, not time elapsed.</p></div>';
+    h += weekCards(avg, planned.length, adds.length, time.totalMinutes, time.withoutTime, affectedN);
+    h += '<div class="panel"><h2>Planned tasks — report % accomplished</h2>' +
+      '<p class="muted">At week\'s end, enter one % per task — any value 0–100. Leave blank what you have not measured yet. An outcome note is asked only at 100%.</p>' +
+      checkinTable(planned, adds) +
+      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="add-planned">+ Add Planned Task</button>' +
+      '<button class="btn" data-act="save-checkin">Save percentages</button></div></div>';
+    h += '<div class="panel"><h2>Additional tasks</h2>' +
+      '<p class="muted">Work added after the plan, with recorded time and documented effects only.</p>' +
+      additionalCards(adds) +
+      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="add-additional">+ Add Additional Task</button></div></div>';
+    h += '<div class="panel"><h2>Submit weekly accomplishment</h2>' +
+      submitStatusLine() +
+      '<p class="muted">Review first, then freeze this week\'s record. Earlier weeks never change; re-submitting updates this week only.</p>' +
+      '<div class="row"><button class="btn primary" data-act="submit-weekly">Submit Weekly Accomplishment</button></div>' +
+      (submitResult ? '<pre class="report">' + esc(submitResult) + '</pre>' : '') + '</div>';
+    h += '<div class="panel"><h2>Documented impacts on planned work</h2><div style="overflow-x:auto">' + impactList() + '</div>' +
+      '<div class="row"><button class="btn" data-act="new-impact">+ Link extra work to affected plan</button></div></div>';
     return h;
+  }
+
+  function submitStatusLine() {
+    var snap = S.snapshots.filter(function (s) {
+      return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember);
+    })[0];
+    if (snap) return '<p><span class="badge ok">✓ Submitted</span> <span class="muted">Record frozen ' + esc(String(snap.generated_at || '').slice(0, 10)) + '. Re-submitting updates this week only.</span></p>';
+    return '<p><span class="badge warn">Not yet submitted</span> <span class="muted">This week\'s record is still open.</span></p>';
+  }
+
+  function vAdditional() {
+    if (S.selectedMember === 'ALL') {
+      return '<div class="panel"><h2>Whose additional work?</h2><p>Select your name at the top first — additional tasks belong to one person and one week.</p></div>';
+    }
+    var m = S.members.filter(function (x) { return x.member_id === S.selectedMember; })[0];
+    var wt = weekTasks(scopedTasks());
+    var adds = wt.filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
+    var time = R.additionalTimeMinutes(wt);
+    return '<div class="panel hero"><h2>Additional tasks</h2>' +
+      '<p class="muted">' + esc(m ? m.display_name : S.selectedMember) + ' · week of ' + esc(S.weekStart) + ' · ' + adds.length + ' recorded · ' + esc(R.fmtH(time.totalMinutes)) + ' total' + (time.withoutTime ? ' · ' + time.withoutTime + ' without recorded time' : '') + '</p></div>' +
+      '<div class="panel">' + additionalCards(adds) +
+      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="add-additional">+ Add Additional Task</button></div>' +
+      '<p class="muted">Only impacts you document are shown as affecting planned work — hours alone never imply a delay.</p></div>' +
+      '<div class="panel"><h2>Documented impacts</h2><div style="overflow-x:auto">' + impactList() + '</div></div>';
   }
 
   function taskTitle(id) {
@@ -217,33 +264,58 @@
   }
 
   // ---------- team overview (management, read-only) ----------
+  // Accomplishment is always shown WITH additional workload — never ranked
+  // on raw counts or on one percentage alone.
   function vTeam() {
     var wt = weekTasks(S.tasks.filter(function (t) { return !t.archived_at; }));
-    var sum = R.summarize(wt, weekLogs());
-    var ta = R.turnaround(wt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
-    var rows = S.members.map(function (m) {
-      var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
-      var ml = S.workLogs.filter(function (l) { return l.member_id === m.member_id && R.inWeek(l.work_date || l.created_at, S.weekStart); });
-      var s = R.summarize(mt, ml);
-      var ot = R.onTimeCompletion(mt);
-      var t2 = R.turnaround(mt.filter(function (t) { return t.task_type === 'ADDITIONAL'; }));
-      var pending = mt.filter(function (t) { return t.status !== 'Completed' && t.status !== 'Cancelled'; }).length;
-      return { m: m, s: s, ot: ot, t2: t2, pending: pending };
-    });
+    var avgAll = R.averageAccomplishment(wt);
+    var timeAll = R.additionalTimeMinutes(wt);
+    var impAll = R.summarizeImpacts(memberImpacts('ALL'));
     var h = '<div class="panel"><h2>Team overview <span class="muted">· read-only; members record via My Dashboard</span></h2>' +
-      '<p class="muted">Roles differ, so people are never ranked on one number. Each row shows completion together with on-time delivery, extra work, effort, pending load, and blockers.</p></div>';
-    h += cardsHTML(sum, ta);
-    h += '<div class="panel"><h2>Individual summaries</h2><div style="overflow-x:auto"><table><thead><tr><th>Member</th><th>Planned done</th><th>On-time (orig)</th><th>Extra work</th><th>Effort (extra)</th><th>Turnaround</th><th>Pending</th><th>Blocked</th></tr></thead><tbody>' +
-      rows.map(function (r) {
-        return '<tr><td><strong>' + esc(r.m.display_name) + '</strong><br><span class="muted">' + esc(r.m.role) + '</span></td>' +
-          '<td>' + r.s.plannedCompleted + '/' + r.s.plannedCount + ' (' + R.fmtPct(r.s.plannedCompletion) + ')</td>' +
-          '<td>' + R.fmtPct(r.ot.original.percent) + ' <span class="muted">' + r.ot.original.onTime + '/' + r.ot.original.total + '</span></td>' +
-          '<td>' + r.s.additionalCompleted + '/' + r.s.additionalCount + '</td>' +
-          '<td>' + R.fmtH(r.s.additionalEffortMinutes) + '</td>' +
-          '<td>' + (r.t2.medianHours === null ? '—' : r.t2.medianHours + 'h') + '</td>' +
-          '<td>' + r.pending + '</td><td>' + r.s.blockedCount + '</td></tr>';
-      }).join('') + '</tbody></table></div></div>';
-    h += '<div class="panel"><h2>All tasks in scope (' + wt.length + ') — open for detail</h2>' + filterBar() + taskTable(wt) + '</div>';
+      '<p class="muted">Week of ' + esc(S.weekStart) + ' (Mon–Sun, Asia/Manila). Roles differ, so raw task counts are never treated as equal effort.</p></div>';
+    h += weekCards(avgAll, avgAll.count, timeAll.taskCount, timeAll.totalMinutes, timeAll.withoutTime, impAll.count);
+    h += '<div class="panel"><div class="row"><button class="btn primary" data-act="gen-team-report">Generate concise team report</button></div>' +
+      '<p class="muted">Opens in Reports — review before export or printing.</p></div>';
+    S.members.forEach(function (m) {
+      var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
+      var planned = plannedList(mt);
+      var avg = R.averageAccomplishment(mt);
+      var time = R.additionalTimeMinutes(mt);
+      var adds = mt.filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
+      var imp = memberImpacts(m.member_id);
+      h += '<div class="panel"><h2>' + esc(m.display_name) + ' <span class="muted">· ' + esc(m.role) + '</span></h2>';
+      h += '<p><strong>Planned average: ' + R.fmtPct(avg.percent) + '</strong> <span class="muted">(mean of reported % across ' + avg.count + ' planned task(s))</span></p>';
+      h += planned.length ? '<ul class="clean">' + planned.map(function (t) {
+        var pct = (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) ? 'Not reported' : t.completion_percent + '%';
+        var why = '';
+        if (Number(t.completion_percent) < 100 || t.completion_percent === '') {
+          var aff = taskAffectors(t.task_id);
+          var reason = t.impact_reason || (t.blocked_reason ? 'Blocked — ' + t.blocked_reason : '');
+          var linked = aff.map(function (i) {
+            var add = S.tasks.filter(function (x) { return String(x.task_id) === String(i.additional_task_id); })[0];
+            var tm = add && add.actual_minutes !== '' && add.actual_minutes !== null && add.actual_minutes !== undefined ? R.fmtH(Number(add.actual_minutes)) : 'time not recorded';
+            return (add ? add.title : i.additional_task_id) + ' (' + tm + '): ' + (i.reason || i.evidence_notes || i.impact_type);
+          }).join('; ');
+          why = '<br><span class="muted">' +
+            (reason ? 'Why incomplete: ' + esc(reason) + (t.impact_notes ? ' — ' + esc(t.impact_notes) : '') : 'No reason given yet.') +
+            (linked ? '<br>Affected by: ' + esc(linked) : '') + '</span>';
+        }
+        return '<li>' + esc(t.title) + ' — <strong>' + esc(pct) + '</strong>' +
+          (t.current_due_at ? ' <span class="muted">due ' + esc(String(t.current_due_at).slice(0, 10)) + '</span>' : '') + why +
+          ' <button class="btn small" data-open="' + esc(t.task_id) + '">Open</button></li>';
+      }).join('') + '</ul>' : '<p class="muted">No planned tasks recorded.</p>';
+      h += '<p><strong>Additional: ' + adds.length + ' task(s), ' + R.fmtH(time.totalMinutes) + ' recorded</strong>' +
+        (time.withoutTime ? ' <span class="muted">(' + time.withoutTime + ' without recorded time)</span>' : '') + '</p>';
+      h += adds.length ? '<ul>' + adds.map(function (t) {
+        var links = imp.filter(function (i) { return String(i.additional_task_id) === String(t.task_id); });
+        var tm = (t.actual_minutes === '' || t.actual_minutes === null || t.actual_minutes === undefined) ? 'time not recorded' : R.fmtH(Number(t.actual_minutes));
+        return '<li>' + esc(t.title) + ' — ' + esc(tm) +
+          (links.length
+            ? '<br><span class="muted">Affected: ' + links.map(function (i) { return esc(taskTitle(i.affected_task_id)) + ' — ' + esc(i.reason || i.evidence_notes || i.impact_type); }).join('; ') + '</span>'
+            : '<br><span class="muted">Reported as not affecting planned work.</span>') + '</li>';
+      }).join('') + '</ul>' : '';
+      h += '</div>';
+    });
     h += '<div class="panel"><h2>Data quality</h2>' + dataQuality(wt) + '</div>';
     return h;
   }
@@ -255,21 +327,6 @@
     return '<ul><li>' + missing.length + ' incomplete task(s) without a documented reason — flagged as requiring clarification.</li>' +
       '<li>' + noEst.length + ' task(s) without effort estimates — excluded from weighted completion (counted, not hidden).</li>' +
       '<li>' + noDue.length + ' open task(s) without any deadline.</li></ul>';
-  }
-
-  function filterBar() {
-    return '<div class="filters">' +
-      '<select id="fStatus"><option value="">All statuses</option>' + ['Not Started', 'In Progress', 'Blocked', 'Completed', 'Cancelled'].map(function (s) { return '<option' + (filters.status === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>' +
-      '<select id="fType"><option value="">Planned + Additional</option><option value="PLANNED"' + (filters.type === 'PLANNED' ? ' selected' : '') + '>Planned</option><option value="ADDITIONAL"' + (filters.type === 'ADDITIONAL' ? ' selected' : '') + '>Additional</option></select>' +
-      '<select id="fPri"><option value="">All priorities</option>' + ['Low', 'Medium', 'High', 'Urgent'].map(function (s) { return '<option' + (filters.priority === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select>' +
-      '<input id="fQ" placeholder="Search tasks…" value="' + esc(filters.q) + '">' +
-      '</div>';
-  }
-
-  function quickAddButtons() {
-    return '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="new-planned">+ Add planned task</button>' +
-      '<button class="btn" data-act="new-additional">+ Quick-add unexpected work</button></div>' +
-      '<p class="muted">Quick-add needs only a title — details can be completed later. Progress measures deliverable achieved, not time elapsed.</p>';
   }
 
   function vReports() {
@@ -308,6 +365,7 @@
     if (S.loading) { el.innerHTML = '<div class="panel">Loading…</div>'; return; }
     var h = '';
     if (view === 'my') h = vMy();
+    else if (view === 'additional') h = vAdditional();
     else if (view === 'team') h = vTeam();
     else if (view === 'reports') h = vReports();
     else if (view === 'settings') h = vSettings();
@@ -317,23 +375,24 @@
   }
 
   function bindView() {
-    var fs = $('fStatus'); if (fs) fs.onchange = function () { filters.status = fs.value; render(); };
-    var ft = $('fType'); if (ft) ft.onchange = function () { filters.type = ft.value; render(); };
-    var fp = $('fPri'); if (fp) fp.onchange = function () { filters.priority = fp.value; render(); };
-    var fq = $('fQ'); if (fq) fq.oninput = function () { filters.q = fq.value; renderKeepFocus(); };
     document.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openTask(b.dataset.open); }; });
     document.querySelectorAll('[data-act]').forEach(function (b) { b.onclick = function () { act(b.dataset.act); }; });
-  }
-  function renderKeepFocus() {
-    var v = $('fQ') ? $('fQ').value : '';
-    render();
-    var q = $('fQ'); if (q) { q.focus(); q.setSelectionRange(v.length, v.length); }
+    // Show the link picker + effect question only when "additional" is chosen.
+    document.querySelectorAll('[data-rsel]').forEach(function (sel) {
+      sel.onchange = function () {
+        var wrap = $('wLinkWrap_' + sel.getAttribute('data-rsel'));
+        if (wrap) wrap.style.display = sel.value === 'additional' ? 'inline' : 'none';
+      };
+    });
   }
 
   // ---------- actions ----------
   function act(a) {
-    if (a === 'new-planned') taskDialog('PLANNED');
-    else if (a === 'new-additional') taskDialog('ADDITIONAL');
+    if (a === 'add-planned') addPlannedDialog();
+    else if (a === 'add-additional') addAdditionalDialog();
+    else if (a === 'save-checkin') saveCheckinUI();
+    else if (a === 'submit-weekly') submitWeekly();
+    else if (a === 'gen-team-report') genTeamReport();
     else if (a === 'new-impact') impactDialog();
     else if (a === 'add-member') memberDialog();
     else if (a === 'gen-report') genReport();
@@ -341,8 +400,372 @@
     else if (a === 'print') window.print();
     else if (a === 'snapshot') saveSnapshot();
     else if (a === 'save-config') saveConfig();
-    else if (a === 'use-demo') { window.Store.enterDemo(); S.error = ''; render(); toast('Demo mode enabled.'); }
+    else if (a === 'use-demo') { window.Store.enterDemo(); S.error = ''; submitResult = ''; render(); toast('Demo mode enabled.'); }
     else if (a === 'ping') ping();
+  }
+
+  // ---------- weekly check-in: slim dialogs, save, submit ----------
+  function addPlannedDialog() {
+    if (S.selectedMember === 'ALL') { toast('Select your name first.'); return; }
+    var dlg = document.createElement('dialog');
+    dlg.innerHTML = '<h3 style="margin-top:0">Add planned task</h3>' +
+      '<p class="muted">Title is required; deadline and description are optional.</p>' +
+      '<div class="form">' +
+      '<label class="full">Title*<input id="pTitle" placeholder="What will you deliver?"></label>' +
+      '<label>Deadline (optional)<input id="pDue" type="date"></label>' +
+      '<label class="full">Brief description (optional)<textarea id="pDesc" rows="2"></textarea></label></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn primary" id="pSave">Add task</button><button class="btn" id="pCancel">Cancel</button></div>';
+    document.body.appendChild(dlg); dlg.showModal();
+    dlg.querySelector('#pCancel').onclick = function () { dlg.close(); dlg.remove(); };
+    dlg.querySelector('#pSave').onclick = function () {
+      var title = dlg.querySelector('#pTitle').value.trim();
+      if (!title) { toast('Give the task a title.'); return; }
+      var due = dlg.querySelector('#pDue').value;
+      var p = {
+        task_id: window.Store.uid('T'), title: title, description: dlg.querySelector('#pDesc').value,
+        owner_id: S.selectedMember, task_type: 'PLANNED', priority: 'Medium', status: 'Not Started',
+        completion_percent: 0, current_due_at: due, original_due_at: due
+      };
+      dlg.querySelector('#pSave').disabled = true; dlg.close(); dlg.remove();
+      if (window.Store.isDemo()) {
+        S.tasks.unshift(Object.assign({
+          created_at: new Date().toISOString(), started_at: '', completed_at: '', estimated_minutes: '',
+          actual_minutes: '', requested_by: '', blocked_reason: '', impact_reason: '', impact_notes: '',
+          created_by: 'demo', last_updated_at: new Date().toISOString(), archived_at: ''
+        }, p));
+        render(); toast('Planned task added (demo).');
+        return;
+      }
+      if (!requireLiveKey()) return;
+      setLoading(true, 'Adding…'); render();
+      window.Api.createTask(p).then(function () { return refreshLive(); })
+        .then(function () { setLoading(false); render(); toast('Planned task added.'); })
+        .catch(function (e) { setLoading(false); render(); fail(e); });
+    };
+  }
+
+  function addAdditionalDialog() {
+    if (S.selectedMember === 'ALL') { toast('Select your name first.'); return; }
+    var planned = plannedList(weekTasks(scopedTasks()));
+    var dlg = document.createElement('dialog');
+    dlg.innerHTML = '<h3 style="margin-top:0">Add additional task</h3>' +
+      '<p class="muted">Work added after the plan. Time spent is recorded as one total — no detailed tracking needed.</p>' +
+      '<div class="form">' +
+      '<label class="full">Title*<input id="aTitle" placeholder="What came up?"></label>' +
+      '<label>Hours spent<input id="aH" type="number" min="0" value="0"></label>' +
+      '<label>Minutes spent<input id="aM" type="number" min="0" max="59" value="0"></label>' +
+      '<label class="full">Did this affect your planned work?<select id="aAff"><option value="No">No</option><option value="Yes">Yes</option></select></label>' +
+      '<div id="aYesBox" class="full" style="display:none">' +
+      '<label>Which planned task(s)?<div id="aPlans">' + (planned.length ? planned.map(function (t) {
+        return '<label style="display:block;font-size:14px"><input type="checkbox" value="' + esc(t.task_id) + '"> ' + esc(t.title) + '</label>';
+      }).join('') : '<span class="muted">No planned tasks this week.</span>') + '</div></label>' +
+      '<label>Impact type<select id="aType"><option value="">Choose…</option>' + ['Delayed', 'Paused', 'Scope Changed', 'Dependency Affected', 'No Impact'].map(function (x) { return '<option>' + x + '</option>'; }).join('') + '</select></label>' +
+      '<label>Short explanation*<textarea id="aWhy" rows="2" placeholder="What happened to the planned task?"></textarea></label>' +
+      '</div></div>' +
+      '<div class="row" style="margin-top:10px"><button class="btn primary" id="aSave">Add task</button><button class="btn" id="aCancel">Cancel</button></div>' +
+      '<p class="muted">Only documented impacts are shown in reports — hours alone never imply a delay.</p>';
+    document.body.appendChild(dlg); dlg.showModal();
+    dlg.querySelector('#aAff').onchange = function (e) {
+      dlg.querySelector('#aYesBox').style.display = e.target.value === 'Yes' ? 'block' : 'none';
+    };
+    dlg.querySelector('#aCancel').onclick = function () { dlg.close(); dlg.remove(); };
+    dlg.querySelector('#aSave').onclick = function () {
+      var title = dlg.querySelector('#aTitle').value.trim();
+      if (!title) { toast('Give the task a title.'); return; }
+      var mins = Math.max(0, Number(dlg.querySelector('#aH').value || 0)) * 60 + Math.max(0, Number(dlg.querySelector('#aM').value || 0));
+      var affected = dlg.querySelector('#aAff').value === 'Yes';
+      var checked = [];
+      dlg.querySelectorAll('#aPlans input[type=checkbox]:checked').forEach(function (c) { checked.push(c.value); });
+      var why = dlg.querySelector('#aWhy').value.trim();
+      var type = dlg.querySelector('#aType').value;
+      if (affected && !checked.length) { toast('Select the affected planned task(s), or answer No.'); return; }
+      if (affected && !why) { toast('Add a short explanation of the effect.'); return; }
+      if (affected && !type) { toast('Choose the impact type.'); return; }
+      var newId = window.Store.uid('T');
+      dlg.querySelector('#aSave').disabled = true; dlg.close(); dlg.remove();
+      var task = {
+        task_id: newId, title: title, description: '', owner_id: S.selectedMember, task_type: 'ADDITIONAL',
+        priority: 'Medium', status: 'Not Started', completion_percent: 0,
+        actual_minutes: mins > 0 ? mins : '', requested_by: '', impact_reason: affected ? why : ''
+      };
+      var links = affected ? checked.map(function (pid) {
+        return { additional_task_id: newId, affected_task_id: pid, impact_type: type, reason: why, evidence_notes: '' };
+      }) : [];
+      if (window.Store.isDemo()) {
+        var now = new Date().toISOString();
+        S.tasks.unshift(Object.assign({
+          created_at: now, started_at: '', completed_at: '', original_due_at: '', current_due_at: '',
+          estimated_minutes: '', blocked_reason: '', impact_notes: '', created_by: 'demo',
+          last_updated_at: now, archived_at: ''
+        }, task));
+        links.forEach(function (l) {
+          S.impacts.push(Object.assign({ impact_id: window.Store.uid('I'), estimated_delay_minutes: '', actual_delay_minutes: '', created_by: 'demo', created_at: now, updated_at: now }, l));
+        });
+        render(); toast('Additional task recorded (demo).');
+        return;
+      }
+      if (!requireLiveKey()) return;
+      setLoading(true, 'Recording…'); render();
+      window.Api.createTask(task).then(function () {
+        var chain = Promise.resolve();
+        links.forEach(function (l) { chain = chain.then(function () { return window.Api.upsertImpact(l); }); });
+        return chain;
+      }).then(function () { return refreshLive(); })
+        .then(function () { setLoading(false); render(); toast('Additional task recorded.'); })
+        .catch(function (e) { setLoading(false); render(); fail(e); });
+    };
+  }
+
+  // Read one check-in row from the form. pct null = left blank (unreported).
+  function readCheckinRow(t) {
+    var pctEl = document.getElementById('wPct_' + t.task_id);
+    if (!pctEl) return null;
+    var raw = pctEl.value.trim();
+    var noteEl = document.getElementById('wNote_' + t.task_id);
+    var rsel = document.getElementById('wReason_' + t.task_id);
+    var lsel = document.getElementById('wLink_' + t.task_id);
+    var esel = document.getElementById('wEffect_' + t.task_id);
+    var whyEl = document.getElementById('wWhy_' + t.task_id);
+    return {
+      task: t,
+      pct: raw === '' ? null : Number(raw),
+      outcomeNote: noteEl ? noteEl.value.trim() : '',
+      reason: rsel ? rsel.value : 'none',
+      linkedId: lsel ? lsel.value : '',
+      effect: esel ? esel.value : 'Delayed',
+      explanation: whyEl ? whyEl.value.trim() : ''
+    };
+  }
+
+  // Read the check-in form; validate only. Never writes.
+  function collectCheckin(planned, adds) {
+    var L = R.CHECKIN_REASON_LABELS;
+    var updates = [], errors = [];
+    planned.forEach(function (t) {
+      var row = readCheckinRow(t);
+      if (!row) return;
+      if (row.pct === null) {
+        if (row.reason !== 'none' || row.explanation) errors.push(t.title + ': enter the % accomplished first.');
+        return; // unreported — nothing to save, excluded from averages
+      }
+      var v = R.validateCheckinRow({
+        pct: row.pct, alreadyCompleted: t.status === 'Completed', outcomeNote: row.outcomeNote,
+        reason: row.reason, linkedId: row.linkedId, explanation: row.explanation
+      });
+      if (row.reason === 'none' && row.explanation) {
+        errors.push(t.title + ': choose why it is incomplete, or clear the explanation.');
+        return;
+      }
+      if (!v.ok) { v.errors.forEach(function (e) { errors.push(t.title + ': ' + e); }); return; }
+      var pct = Math.round(row.pct);
+      var link = null;
+      if (row.reason === 'additional' && row.linkedId) {
+        var add = adds.filter(function (a) { return String(a.task_id) === String(row.linkedId); })[0];
+        var lv = R.validateImpactLink(add, t, S.weekStart);
+        if (!lv.ok) { lv.errors.forEach(function (e) { errors.push(t.title + ': ' + e); }); return; }
+        link = { additional_task_id: row.linkedId, affected_task_id: t.task_id, impact_type: row.effect, reason: row.explanation, evidence_notes: '' };
+      }
+      var cur = existingCheckin(t);
+      var next = { task_id: t.task_id, completion_percent: pct };
+      var dirty = pct !== Number(t.completion_percent);
+      if (pct === 100 && t.status !== 'Completed') { next.status = 'Completed'; next.outcome_note = row.outcomeNote; dirty = true; }
+      else if (t.status === 'Completed' && pct < 100) { next.status = 'In Progress'; dirty = true; }
+      else if (t.status === 'Not Started' && pct > 0) { next.status = 'In Progress'; dirty = true; }
+      var reasonDirty = (row.reason !== cur.reason) || (row.explanation !== cur.explanation);
+      if (row.reason !== 'none' && reasonDirty) {
+        next.impact_reason = L[row.reason] || row.reason;
+        next.impact_notes = row.explanation;
+      }
+      var linkDirty = false;
+      if (link) {
+        var prior = S.impacts.filter(function (i) {
+          return String(i.affected_task_id) === String(t.task_id) && String(i.additional_task_id) === String(link.additional_task_id);
+        })[0];
+        if (!prior) linkDirty = true;
+        else {
+          if ((prior.reason || '') !== link.reason || (prior.impact_type || '') !== link.impact_type) linkDirty = true;
+          link.impact_id = prior.impact_id;
+        }
+      }
+      if (!dirty && !reasonDirty && !linkDirty) return; // untouched row writes nothing
+      if (linkDirty) next._link = link;
+      updates.push(next);
+    });
+    return { updates: updates, errors: errors };
+  }
+
+  // Save the check-in: one updateTask per changed row, then one upsertImpact
+  // per new/changed link. No daily updates or time logs required.
+  function saveCheckin() {
+    var planned = plannedList(weekTasks(scopedTasks()));
+    var adds = weekTasks(scopedTasks()).filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
+    var c = collectCheckin(planned, adds);
+    if (c.errors.length) {
+      toast(c.errors[0]);
+      if (c.errors.length > 1) toast((c.errors.length - 1) + ' more need attention.');
+      if (!c.updates.length) return Promise.resolve({ saved: 0, errors: c.errors.length });
+    }
+    if (!c.updates.length) {
+      if (!c.errors.length) toast('Nothing new to save.');
+      return Promise.resolve({ saved: 0, errors: c.errors.length });
+    }
+    if (window.Store.isDemo()) {
+      var now = new Date().toISOString();
+      c.updates.forEach(function (u) {
+        var t = S.tasks.filter(function (x) { return x.task_id === u.task_id; })[0];
+        if (!t) return;
+        var prev = Number(t.completion_percent);
+        t.completion_percent = u.completion_percent;
+        if (u.status) t.status = u.status;
+        if (u.status === 'Completed') t.completed_at = now;
+        if (t.status === 'Completed' && u.completion_percent < 100) t.completed_at = '';
+        if (u.impact_reason !== undefined) t.impact_reason = u.impact_reason;
+        if (u.impact_notes !== undefined) t.impact_notes = u.impact_notes;
+        t.last_updated_at = now;
+        if (u.outcome_note) {
+          S.updates.push({
+            update_id: window.Store.uid('U'), task_id: t.task_id, member_id: t.owner_id,
+            update_date: S.weekStart, previous_percent: prev, new_percent: 100,
+            accomplishment_notes: u.outcome_note, remaining_work: '', blocker_notes: '', created_at: now
+          });
+        }
+        if (u._link) {
+          var prior = S.impacts.filter(function (i) {
+            return String(i.affected_task_id) === String(u.task_id) && String(i.additional_task_id) === String(u._link.additional_task_id);
+          })[0];
+          if (prior) {
+            prior.impact_type = u._link.impact_type; prior.reason = u._link.reason; prior.updated_at = now;
+          } else {
+            S.impacts.push(Object.assign({
+              impact_id: window.Store.uid('I'), estimated_delay_minutes: '', actual_delay_minutes: '',
+              created_by: 'demo', created_at: now, updated_at: now
+            }, u._link));
+          }
+        }
+      });
+      render(); toast('Saved ' + c.updates.length + ' update(s) (demo).');
+      return Promise.resolve({ saved: c.updates.length, errors: c.errors.length });
+    }
+    if (!requireLiveKey()) return Promise.resolve({ saved: 0, blocked: true });
+    setLoading(true, 'Saving…'); render();
+    var chain = Promise.resolve();
+    c.updates.forEach(function (u) {
+      var link = u._link; delete u._link;
+      chain = chain.then(function () { return window.Api.updateTask(u); }).then(function () {
+        if (link) return window.Api.upsertImpact(link);
+      });
+    });
+    return chain.then(function () { return refreshLive(); }).then(function () {
+      setLoading(false); render(); toast('Saved ' + c.updates.length + ' update(s).');
+      return { saved: c.updates.length, errors: c.errors.length };
+    }).catch(function (e) { setLoading(false); render(); fail(e); return { saved: 0, failed: true }; });
+  }
+
+  function saveCheckinUI() {
+    saveCheckin().then(function () { /* toasts/render handled inside */ });
+  }
+
+  // Review step: show every planned task with its entered % and reason state,
+  // block on validation errors, then confirm. The form underneath keeps its
+  // values whatever the reviewer decides.
+  function submitWeekly() {
+    if (S.selectedMember === 'ALL') { toast('Select your name first.'); return; }
+    var planned = plannedList(weekTasks(scopedTasks()));
+    var adds = weekTasks(scopedTasks()).filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
+    var c = collectCheckin(planned, adds);
+    var L = R.CHECKIN_REASON_LABELS;
+    var items = planned.map(function (t) {
+      var row = readCheckinRow(t);
+      var pctText = !row || row.pct === null ? 'Not reported — stays out of the average' : Math.round(row.pct) + '%';
+      var reasonText = '—';
+      if (row && row.pct !== null && row.pct < 100) {
+        reasonText = row.reason === 'none' ? 'No reason given (optional)' :
+          L[row.reason] + (row.reason === 'additional' && row.linkedId ? ' → ' + taskTitle(row.linkedId) : '') + ': ' + (row.explanation || '(missing)');
+      }
+      var errs = c.errors.filter(function (e) { return e.indexOf(t.title + ': ') === 0; });
+      return { title: t.title, pctText: pctText, reasonText: reasonText, errs: errs };
+    });
+    var unrep = items.filter(function (i) { return i.pctText.indexOf('Not reported') === 0; }).length;
+    var dlg = document.createElement('dialog');
+    dlg.innerHTML = '<h3 style="margin-top:0">Review before submitting</h3>' +
+      '<p class="muted">Week of ' + esc(S.weekStart) + '. ' + planned.length + ' planned task(s)' +
+      (unrep ? ', ' + unrep + ' not yet reported (excluded from the average)' : ', all reported') + '.</p>' +
+      '<ul class="review">' + items.map(function (i) {
+        return '<li><strong>' + esc(i.title) + '</strong> — ' + esc(i.pctText) + '<br><span class="muted">' + esc(i.reasonText) + '</span>' +
+          i.errs.map(function (e) { return '<br><span class="err">' + esc(e) + '</span>'; }).join('') + '</li>';
+      }).join('') + '</ul>' +
+      (c.errors.length
+        ? '<p class="err"><strong>' + c.errors.length + ' issue(s) to fix first.</strong> Nothing was saved.</p><div class="row"><button class="btn primary" id="rBack">Back to fix</button></div>'
+        : '<p class="muted">Submitting freezes this week\'s record. Earlier weeks never change.</p><div class="row"><button class="btn primary" id="rGo">Confirm submit</button><button class="btn" id="rBack">Back</button></div>');
+    document.body.appendChild(dlg); dlg.showModal();
+    dlg.querySelector('#rBack').onclick = function () { dlg.close(); dlg.remove(); };
+    var go = dlg.querySelector('#rGo');
+    if (go) go.onclick = function () { go.disabled = true; dlg.close(); dlg.remove(); doSubmit(); };
+  }
+
+  // Submit = save check-in, then freeze the week via idempotent snapshot,
+  // then show the generated report. Rerunning updates the same snapshot;
+  // other weeks are never touched.
+  function doSubmit() {
+    setLoading(true, 'Submitting weekly accomplishment…'); render();
+    saveCheckin().then(function (r) {
+      if (r.blocked || r.failed) return;
+      if (window.Store.isDemo()) {
+        var wt = weekTasks(scopedTasks());
+        var avg = R.averageAccomplishment(wt);
+        var time = R.additionalTimeMinutes(wt);
+        var ex = S.snapshots.filter(function (s) { return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember); })[0];
+        var row = {
+          snapshot_id: ex ? ex.snapshot_id : window.Store.uid('S'), week_start: S.weekStart, member_id: S.selectedMember,
+          planned_task_count: avg.count, planned_completion_percent: avg.percent,
+          additional_task_count: time.taskCount, additional_effort_minutes: time.totalMinutes,
+          generated_at: new Date().toISOString()
+        };
+        if (ex) Object.assign(ex, row); else S.snapshots.push(row);
+        submitResult = R.buildReportText(reportContext());
+        setLoading(false); render(); toast('Submitted (demo) — this week\'s record is frozen.');
+        return;
+      }
+      return window.Api.createSnapshot({ week_start: S.weekStart, member_id: S.selectedMember }).then(function () {
+        return window.Api.weeklyReport({ week_start: S.weekStart, member_id: S.selectedMember });
+      }).then(function (rep) {
+        submitResult = rep.text; lastReport = rep.text;
+        setLoading(false); render(); toast('Submitted — this week\'s record is frozen.');
+      });
+    }).catch(function (e) { setLoading(false); render(); fail(e); });
+  }
+
+  function teamReportText() {
+    var wt = weekTasks(S.tasks.filter(function (t) { return !t.archived_at; }));
+    var e = new Date(S.weekStart + 'T00:00:00Z'); e.setUTCDate(e.getUTCDate() + 6);
+    var L = ['WEEKLY ACCOMPLISHMENT REPORT — Academic Affairs Team',
+      'Reporting period: ' + S.weekStart + ' to ' + e.toISOString().slice(0, 10) + ' (Asia/Manila, Mon–Sun; working days Mon–Fri).', ''];
+    S.members.forEach(function (m) {
+      var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
+      var avg = R.averageAccomplishment(mt);
+      var time = R.additionalTimeMinutes(mt);
+      var imp = R.summarizeImpacts(memberImpacts(m.member_id));
+      L.push(m.display_name + ' (' + m.role + '): planned average ' +
+        (avg.percent === null ? '—' : avg.percent + '%') + ' across ' + avg.count +
+        '; additional ' + time.taskCount + ' task(s), ' + time.totalMinutes + ' min recorded; ' +
+        imp.count + ' documented impact(s).');
+      imp.reasons.forEach(function (x) {
+        L.push('  • ' + taskTitle(x.additional_task_id) + ' → ' + taskTitle(x.affected_task_id) + ': ' + (x.reason || x.evidence_notes));
+      });
+    });
+    return L.join('\n');
+  }
+
+  function genTeamReport() {
+    if (window.Store.isDemo()) {
+      lastReport = teamReportText();
+      view = 'reports'; render(); toast('Team report generated (demo).');
+      return;
+    }
+    setLoading(true, 'Generating team report…'); render();
+    window.Api.weeklyReport({ week_start: S.weekStart, member_id: 'ALL' }).then(function (r) {
+      lastReport = r.text; setLoading(false); view = 'reports'; render(); toast('Team report generated.');
+    }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
   function requireLiveKey() {
@@ -721,6 +1144,9 @@
       var p = S.selectedMember === 'ALL' ? {} : { member_id: S.selectedMember };
       return window.Api.listDailyUpdates(p).then(function (u) { S.updates = u || []; }).catch(function (e) { warnings.push('daily updates: ' + ((e && e.message) || 'failed')); });
     }).then(function () {
+      // Snapshots power the submitted / not-yet-submitted status line.
+      return window.Api.listSnapshots({}).then(function (s) { S.snapshots = s || []; }).catch(function (e) { warnings.push('snapshots: ' + ((e && e.message) || 'failed')); });
+    }).then(function () {
       // Partial refreshes must be visible: stale sub-lists alongside fresh tasks
       // would silently misstate effort and progress.
       S.error = warnings.length ? 'Partial refresh — showing fresh tasks but stale ' + warnings.join('; ') + '. Retry shortly.' : '';
@@ -730,16 +1156,18 @@
   // ---------- boot ----------
   function boot() {
     window.Store.enterDemo();
-    $('memberSelect').onchange = function (e) { S.selectedMember = e.target.value; render(); };
+    $('memberSelect').onchange = function (e) { S.selectedMember = e.target.value; submitResult = ''; lastReport = ''; render(); };
     $('weekInput').value = S.weekStart;
     $('weekInput').onchange = function (e) {
       if (!e.target.value) return;
       S.weekStart = window.Store.monday(e.target.value);
       e.target.value = S.weekStart;
+      submitResult = ''; lastReport = '';
       if (!window.Store.isDemo()) refreshLive().then(render).catch(function (err) { fail(err); });
       else render();
     };
     document.querySelectorAll('.nav button').forEach(function (b) { b.onclick = function () { view = b.dataset.view; render(); }; });
+    $('settingsLink').onclick = function () { view = 'settings'; render(); };
     // Auto-connect if an API URL was previously saved
     if (window.AppConfig.getApiBase()) connectLive();
     else render();

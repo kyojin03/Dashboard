@@ -431,7 +431,11 @@ function createTask_(p, actor) {
     completed_at: p.completed_at || '',
     priority: p.priority || 'Medium',
     status: p.status || 'Not Started',
-    completion_percent: p.completion_percent !== undefined ? Number(p.completion_percent) : 0,
+    // Unreported ⟺ completion_percent is '' (never silently 0%). The Friday
+    // check-in writes explicit percentages; averages/weighted calculations
+    // exclude unreported tasks and disclose the count. Added 2026-10-13;
+    // rows created earlier keep their stored 0 (treated as reported zero).
+    completion_percent: (p.completion_percent === undefined || p.completion_percent === null || p.completion_percent === '') ? '' : Number(p.completion_percent),
     estimated_minutes: p.estimated_minutes !== undefined && p.estimated_minutes !== '' ? Number(p.estimated_minutes) : '',
     actual_minutes: p.actual_minutes !== undefined && p.actual_minutes !== '' ? Number(p.actual_minutes) : '',
     blocked_reason: p.blocked_reason || '',
@@ -753,6 +757,7 @@ function summarize_(tasks, workLogs) {
   planned.forEach(function (t) {
     var est = Number(t.estimated_minutes);
     if (!isFinite(est) || est <= 0) { excl++; return; }
+    if (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) { excl++; return; } // unreported: excluded, disclosed
     var pct = Math.min(100, Math.max(0, Number(t.completion_percent) || 0));
     num += est * pct / 100; den += est;
   });

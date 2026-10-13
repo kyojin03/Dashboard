@@ -122,6 +122,10 @@ export function weightedCompletion(tasks) {
       excludedCount++;
       continue;
     }
+    if (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) {
+      excludedCount++; // unreported: excluded and disclosed, never counted as 0%
+      continue;
+    }
     num += est * (clampPercent(t.completion_percent) / 100);
     den += est;
   }
@@ -322,6 +326,47 @@ export function additionalWorkloadSummary(tasks, workLogs, weekStartISO = null) 
   };
 }
 
+/** Average accomplishment % across eligible PLANNED tasks (arithmetic mean of
+ *  REPORTED completion_percent). Unreported ('') tasks are excluded and
+ *  disclosed — never silently counted as 0%. */
+export function averageAccomplishment(tasks) {
+  const planned = eligibleTasks(tasks, 'PLANNED');
+  let sum = 0, reported = 0, unreported = 0;
+  for (const t of planned) {
+    if (t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined) { unreported++; continue; }
+    sum += Math.min(100, Math.max(0, Number(t.completion_percent) || 0));
+    reported++;
+  }
+  return { percent: reported ? round1(sum / reported) : null, count: planned.length, reported, unreported };
+}
+
+/** Total time on ADDITIONAL tasks from recorded task durations only. */
+export function additionalTimeMinutes(tasks) {
+  const adds = (tasks || []).filter((t) => t && t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled' && !t.archived_at);
+  let total = 0, withTime = 0, withoutTime = 0;
+  for (const t of adds) {
+    const has = t.actual_minutes !== '' && t.actual_minutes !== null && t.actual_minutes !== undefined;
+    const m = Number(t.actual_minutes);
+    if (has && Number.isFinite(m) && m >= 0) { total += m; withTime++; }
+    else withoutTime++;
+  }
+  return { totalMinutes: total, taskCount: adds.length, withTime, withoutTime };
+}
+
+/** Documented impact links only — counts by type plus recorded reasons. */
+export function summarizeImpacts(impacts) {
+  const list = impacts || [];
+  const byType = {};
+  const reasons = [];
+  for (const i of list) {
+    byType[i.impact_type || 'Unspecified'] = (byType[i.impact_type || 'Unspecified'] || 0) + 1;
+    if (i.reason || i.evidence_notes) {
+      reasons.push({ additional_task_id: i.additional_task_id, affected_task_id: i.affected_task_id, impact_type: i.impact_type, reason: i.reason || '', evidence_notes: i.evidence_notes || '' });
+    }
+  }
+  return { count: list.length, byType, reasons };
+}
+
 /** Validate a work-log entry (no negative time, end after start). */
 export function validateWorkLog(l) {
   const errors = [];
@@ -337,6 +382,50 @@ export function validateWorkLog(l) {
   if (l.minutes_spent !== undefined && l.minutes_spent !== null && l.minutes_spent !== '') {
     if (!Number.isFinite(m) || m < 0 || m > 1440) errors.push('minutes_spent must be between 0 and 1440.');
   }
+  return { ok: errors.length === 0, errors };
+}
+
+/** Week scope shared by every view (mirrors reports.js scopeWeek). */
+export function scopeWeek(tasks, weekStartISO) {
+  return (tasks || []).filter((t) => {
+    if (!t || t.archived_at) return false;
+    return inWeek(t.created_at, weekStartISO) || inWeek(t.current_due_at || t.original_due_at, weekStartISO) ||
+      inWeek(t.completed_at, weekStartISO) ||
+      (String(t.created_at || '').slice(0, 10) < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
+  });
+}
+
+export const CHECKIN_REASONS = ['none', 'additional', 'waiting', 'time', 'technical', 'other'];
+
+/** Pure Friday check-in row validation (mirrors reports.js). pct null = unreported. */
+export function validateCheckinRow(r) {
+  const errors = [];
+  if (r.pct === null || r.pct === undefined) return { ok: true, errors, unreported: true };
+  if (!Number.isFinite(r.pct) || r.pct < 0 || r.pct > 100) return { ok: false, errors: ['Enter a percentage from 0 to 100.'], unreported: false };
+  if (r.pct === 100) {
+    if (!r.alreadyCompleted && !(r.outcomeNote && String(r.outcomeNote).trim())) errors.push('Add what was delivered to mark 100% complete.');
+    return { ok: errors.length === 0, errors, unreported: false };
+  }
+  const reason = r.reason || 'none';
+  if (reason !== 'none') {
+    if (!(r.explanation && String(r.explanation).trim())) errors.push('Explain the delay briefly.');
+    if (reason === 'additional' && !r.linkedId) errors.push('Link the additional task that affected this plan.');
+  }
+  return { ok: errors.length === 0, errors, unreported: false };
+}
+
+/** Pure impact-link validation incl. cross-week rejection (mirrors reports.js). */
+export function validateImpactLink(additionalTask, plannedTask, weekStartISO) {
+  const errors = [];
+  if (!additionalTask || !plannedTask) return { ok: false, errors: ['Both tasks are required.'] };
+  if (String(additionalTask.task_id) === String(plannedTask.task_id)) return { ok: false, errors: ['A task cannot affect itself.'] };
+  if (additionalTask.task_type !== 'ADDITIONAL') errors.push('The affecting task must be an additional task.');
+  if (plannedTask.task_type !== 'PLANNED') errors.push('The affected task must be a planned task.');
+  const inScope = (t) => inWeek(t.created_at, weekStartISO) || inWeek(t.current_due_at || t.original_due_at, weekStartISO) ||
+    inWeek(t.completed_at, weekStartISO) ||
+    (String(t.created_at || '').slice(0, 10) < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
+  if (!inScope(additionalTask)) errors.push('The additional task is outside this reporting week.');
+  if (!inScope(plannedTask)) errors.push('The planned task is outside this reporting week.');
   return { ok: errors.length === 0, errors };
 }
 
