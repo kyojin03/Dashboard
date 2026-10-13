@@ -1,29 +1,34 @@
 # Security & Access-Control Documentation
 
-## Access model (as implemented)
+## Access model (as implemented — OPEN-WRITE MODE since 2026-10-13)
+
+> **Owner decision:** all key requirements were removed so anyone with the link can add and edit freely. Anyone with the `/exec` URL or the site URL can read **and** write every record. Do not use this for sensitive data.
 
 | Capability | Control |
 |---|---|
 | View individual dashboard (member selector) | Open — **view filter only, not authentication** |
-| View team dashboard | Open — read-only |
-| Create/update tasks, daily updates, work logs, impacts, snapshots | Requires `EDIT_KEY` (asked at write time, held in tab memory only, verified server-side; never in source) |
-| Roster add/edit, settings save | Requires separate `ADMIN_KEY` |
+| View team dashboard | Open — read-only view, same data |
+| Create/update tasks, daily updates, work logs, impacts, snapshots | **Open** — no key asked, no key checked |
+| Roster add/edit, settings save | **Open** — no key asked, no key checked |
 | Audit | Every create/update/reassign/deadline-change/completion-change/archive writes to `TaskEvents` with actor + reason |
 
-Edit and admin keys are compared against **Script Properties** on the server. The frontend never contains secrets. GET is read-only: write actions over GET return `METHOD_NOT_ALLOWED`. API errors return `{code, message}` only — stack traces and configuration are never leaked.
+No secrets exist in the frontend. GET is read-only: write actions over GET return `METHOD_NOT_ALLOWED`. API errors return `{code, message}` only — stack traces and configuration are never leaked. Validation, locking, idempotency, and audit history still apply to every write.
 
-## Key transport and storage (audit 2026-10-12, verified in source)
+## What was removed (2026-10-13, on owner request)
 
-- Keys travel in the **HTTPS POST body** to `script.google.com` (`js/api.js` uses `Content-Type: text/plain` to avoid CORS preflights; transport encryption comes from TLS). They are never placed in URLs, so they do not land in server logs or browser history.
-- Keys are held in **page-lifetime JS memory only** — never `localStorage`, `sessionStorage`, source, workflow files, or sample config (verified by repo scan + tests — only property *names* appear in docs/code). Refreshing clears them; the app re-asks at the next write instead of persisting anything.
-- Any script running on the page shares the JS runtime, so the XSS posture matters regardless of storage: all server- and user-supplied strings are HTML-escaped at render (`esc()` in `js/app.js`; verified on banners, tables, dialogs, history, and report preview), and no `innerHTML` path injects raw data. There is no evaluated user input. Memory-only (vs persisted) additionally means a stolen-device or later XSS session cannot replay an old key.
-- The edit key is **not identity**: it authorizes the device/tab, not the person. Member selection never elevates privilege — every mutating action re-checks the key server-side (`tests/audit.test.mjs` pins per-action enforcement), and `TaskEvents` records the claimed actor for later review, not proof of authorship.
+- `EDIT_KEY` / `ADMIN_KEY` enforcement deleted from `backend/Code.gs` (functions removed; validation/locking/audit untouched).
+- The write-time key dialog deleted from `js/app.js`; write gates pass through after the connectivity check.
+- No key material was ever in source, and none was added or exposed by this change (verified by scan + tests).
+
+## Key transport and storage (superseded 2026-10-13 — kept for history)
+
+Prior design held keys in page-lifetime memory and sent them in the HTTPS POST body. That entire mechanism is removed: the dialog, the memory holder usage, and both server checks are gone, so there is nothing to transport or store. The XSS posture note still applies generally: all server- and user-supplied strings are HTML-escaped at render (`esc()` in `js/app.js`), and no `innerHTML` path injects raw data.
 
 ## Limitations stated explicitly
 
-1. **A shared edit key is not identity verification.** Anyone who learns the key can submit edits as any member. Selecting a name proves nothing about who is typing. Refreshing the page clears the key, so each tab session re-asks at most once per write flow — this is intentional: without organizational SSO there is no secure way to persist authentication, and the app documents this instead of faking it. Mitigations in place: keys never in source or storage, per-request server verification, separate admin key, full audit log, reason required for deadline changes and progress reductions, duplicate-submission guards (`task_id`/`update_id`/`work_log_id` uniqueness + same task/day/percent guard).
-2. **No true identity without organizational authentication.** A safer option is documented below. Until adopted, treat reports as *staff-attested records*, rotate keys when staff change, and restrict the web-app access setting as tightly as the Workspace plan allows (domain-only if available).
-3. **Anonymous web-app access** (required for public GitHub Pages without Google sign-in) means network-level anonymity; authorization rests entirely on the keys. Do not use this for highly sensitive data.
+1. **No access control on writes.** Anyone with the site or API URL can add, edit, archive, or reassign any record, including other members' tasks and the roster. Selecting a name proves nothing and restricts nothing. Mitigations that remain: full audit log (`TaskEvents` records actor + reason), reason required for deadline changes and progress reductions, duplicate-submission guards (`task_id`/`update_id`/`work_log_id` uniqueness + same task/day/percent guard), and Google Sheets version history as the only undo.
+2. **No true identity without organizational authentication.** A safer option is documented below. Until adopted, treat reports as *unattributed team records* and restrict the web-app access setting as tightly as the Workspace plan allows (domain-only if available) — that is now the only available boundary.
+3. **Anonymous web-app access** (required for public GitHub Pages without Google sign-in) means network-level anonymity. Do not use this for highly sensitive data.
 
 ## Safer implementation option (recommended migration)
 
@@ -32,7 +37,7 @@ Edit and admin keys are compared against **Script Properties** on the server. Th
 
 ## Operational rules
 
-- Never expose edit/admin keys in URLs, screenshots, or repos. Rotate both if leaked (Script Properties → edit → redeploy not required).
+- The `EDIT_KEY` / `ADMIN_KEY` Script Properties are now unused and can be deleted; leaving them set changes nothing.
 - Never silently fall back to localStorage when the server fails — the app shows an explicit error and keeps the last good state in memory only.
 - Confirm destructive actions (archive) in UI; archival preserves history (rows are flagged, not deleted).
-- Reads and CSV exports are intentionally open (internal read-only dashboard); the access boundary is the unlisted `/exec` URL plus the key gates on writes. Prefer domain-restricted web-app access when the Workspace plan allows it, and do not use this for highly sensitive data.
+- Reads, writes, and CSV exports are all open; the only access boundary left is the web-app "Who has access" setting plus URL obscurity. Prefer domain-restricted access when the Workspace plan allows it, and do not use this for highly sensitive data.

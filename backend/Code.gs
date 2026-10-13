@@ -8,10 +8,13 @@
  * Apps Script-hosted HTML). All validation + calculations happen here.
  *
  * Script Properties (Project Settings → Script Properties):
- *   EDIT_KEY        — shared secret required for any write action
- *   ADMIN_KEY       — secret required for roster/admin + settings actions
  *   TIMEZONE        — default Asia/Manila
  *   WEEK_START_DAY  — default MON (reporting week Mon–Sun; display Mon–Fri)
+ *
+ * Open-write mode (owner decision 2026-10-13): all actions are available
+ * without keys. Anyone with the /exec URL can read AND write. Validation,
+ * locking, idempotency, and audit history still apply. Restrict the web-app
+ * "Who has access" setting if this must change.
  *
  * Sheets created automatically on first run via ensureSchema_().
  */
@@ -136,44 +139,32 @@ function route_(action, p, key, adminKey) {
     case 'ping': return { status: 'ok', time: new Date().toISOString(), sheets: Object.keys(SCHEMA) };
     case 'initLoad': return initLoad_(p);
     case 'listMembers': return readAll_('TeamMembers');
-    case 'upsertMember': requireAdmin_(adminKey); return withLock_(function () { return upsertMember_(p); });
+    case 'upsertMember': return withLock_(function () { return upsertMember_(p); });
     case 'listTasks': return queryTasks_(p);
-    case 'createTask': requireEdit_(key); return withLock_(function () { return createTask_(p, p._actor || 'editor'); });
-    case 'updateTask': requireEdit_(key); return withLock_(function () { return updateTask_(p, p._actor || 'editor'); });
-    case 'archiveTask': requireEdit_(key); return withLock_(function () { return archiveTask_(p, p._actor || 'editor'); });
-    case 'addDailyUpdate': requireEdit_(key); return withLock_(function () { return addDailyUpdate_(p); });
+    case 'createTask': return withLock_(function () { return createTask_(p, p._actor || 'editor'); });
+    case 'updateTask': return withLock_(function () { return updateTask_(p, p._actor || 'editor'); });
+    case 'archiveTask': return withLock_(function () { return archiveTask_(p, p._actor || 'editor'); });
+    case 'addDailyUpdate': return withLock_(function () { return addDailyUpdate_(p); });
     case 'listDailyUpdates': return querySheet_('DailyUpdates', p);
-    case 'addWorkLog': requireEdit_(key); return withLock_(function () { return addWorkLog_(p); });
+    case 'addWorkLog': return withLock_(function () { return addWorkLog_(p); });
     case 'listWorkLogs': return querySheet_('WorkLogs', p);
     case 'taskHistory': return taskHistory_(p.task_id);
-    case 'upsertImpact': requireEdit_(key); return withLock_(function () { return upsertImpact_(p, p._actor || 'editor'); });
+    case 'upsertImpact': return withLock_(function () { return upsertImpact_(p, p._actor || 'editor'); });
     case 'listImpacts': return querySheet_('TaskImpacts', p);
     case 'teamAnalytics': return teamAnalytics_(p);
     case 'weeklyReport': return weeklyReport_(p);
-    case 'createSnapshot': requireEdit_(key); return withLock_(function () { return createSnapshot_(p, p._actor || 'editor'); });
+    case 'createSnapshot': return withLock_(function () { return createSnapshot_(p, p._actor || 'editor'); });
     case 'listSnapshots': return querySheet_('WeeklySnapshots', p);
     case 'exportCsv': return exportCsv_(p);
     case 'getSettings': return readSettings_();
-    case 'saveSettings': requireAdmin_(adminKey); return withLock_(function () { return saveSettings_(p); });
+    case 'saveSettings': return withLock_(function () { return saveSettings_(p); });
     default: throw coded_('UNKNOWN_ACTION', 'Unknown action: ' + action);
   }
 }
 
-/* ============================== Auth ============================== */
+/* ============================== Shared state ============================== */
 
 function props_() { return PropertiesService.getScriptProperties(); }
-
-function requireEdit_(key) {
-  var expected = props_().getProperty('EDIT_KEY');
-  if (!expected) throw coded_('NOT_CONFIGURED', 'EDIT_KEY is not configured. Ask an administrator to set Script Properties.');
-  if (key !== expected) throw coded_('FORBIDDEN', 'Invalid edit key.');
-}
-
-function requireAdmin_(adminKey) {
-  var expected = props_().getProperty('ADMIN_KEY');
-  if (!expected) throw coded_('NOT_CONFIGURED', 'ADMIN_KEY is not configured. Ask an administrator to set Script Properties.');
-  if (adminKey !== expected) throw coded_('FORBIDDEN', 'Invalid admin key.');
-}
 
 /* ============================== Sheets helpers ============================== */
 

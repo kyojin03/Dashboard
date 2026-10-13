@@ -162,18 +162,22 @@ describe('Code.gs data-integrity guards', () => {
   });
 });
 
-describe('Code.gs access-control guards', () => {
-  const writes = ['createTask', 'updateTask', 'archiveTask', 'addDailyUpdate', 'addWorkLog', 'upsertImpact', 'createSnapshot'];
+describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
+  const writes = ['createTask', 'updateTask', 'archiveTask', 'addDailyUpdate', 'addWorkLog', 'upsertImpact', 'createSnapshot', 'upsertMember', 'saveSettings'];
   for (const a of writes) {
-    it(`${a} requires the edit key`, () => {
-      assert.match(codeGs, new RegExp(`case '${a}': requireEdit_`));
+    it(`${a} performs no key check (open writes)`, () => {
+      assert.doesNotMatch(codeGs, new RegExp(`case '${a}': require(Edit|Admin)_`));
     });
   }
-  for (const a of ['upsertMember', 'saveSettings']) {
-    it(`${a} requires the separate admin key`, () => {
-      assert.match(codeGs, new RegExp(`case '${a}': requireAdmin_`));
-    });
-  }
+  it('no key-gate functions remain to mislead readers', () => {
+    assert.doesNotMatch(codeGs, /function requireEdit_/);
+    assert.doesNotMatch(codeGs, /function requireAdmin_/);
+  });
+  it('validation, locking, and audit still guard every write', () => {
+    for (const fn of ['validateTask_', 'withLock_', 'event_']) {
+      assert.ok(codeGs.includes('function ' + fn), fn + ' must still exist');
+    }
+  });
   it('write actions are blocked over GET', () => {
     const get = fnBody(codeGs, 'doGet');
     assert.match(get, /METHOD_NOT_ALLOWED/);

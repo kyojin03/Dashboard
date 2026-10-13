@@ -4,14 +4,12 @@
 
 1. **Create the database.** New Google Sheet → name it (e.g. `AA Workload DB`). Note: the script uses the *bound* spreadsheet (`getActiveSpreadsheet()`), so paste the code into that file's Apps Script project.
 2. **Install the backend.** Extensions → Apps Script → replace `Code.gs` with `backend/Code.gs`. If the project shows `appsscript.json`, replace it with `backend/appsscript.json` (Project Settings → check "Show appsscript.json").
-3. **Script Properties** (Project Settings → Script Properties). Required:
+3. **Script Properties** (Project Settings → Script Properties). Optional:
    | Key | Value | Notes |
    |---|---|---|
-   | `EDIT_KEY` | long random string | Required for every write action |
-   | `ADMIN_KEY` | different long random string | Required for roster + settings |
    | `TIMEZONE` | `Asia/Manila` | Optional; code default is Asia/Manila |
    | `WEEK_START_DAY` | `MON` | Optional; reporting week Mon–Sun |
-   Generate with e.g. `openssl rand -base64 32`. Never commit these values.
+   (`EDIT_KEY` / `ADMIN_KEY` are no longer enforced since 2026-10-13; leftover values are ignored. Restrict "Who has access" instead if writes must be limited.)
 4. **Initialize.** In the editor's function dropdown select `setup` → Run → authorize. This creates `TeamMembers, Tasks, DailyUpdates, WorkLogs, TaskEvents, TaskImpacts, WeeklySnapshots, Settings`, seeds the 11-member roster and default settings. Re-running is safe (no duplicates: roster seeding skips when populated; headers migrate by adding missing columns).
 5. **Deploy.** Deploy → New deployment → type **Web app** → Execute as: **Me** → Who has access: **Anyone** (use domain-restricted access if your Workspace plan offers it) → Deploy → copy the `/exec` URL.
 6. **Update the API without breaking clients.** Deploy → Manage deployments → Edit (new version). The `/exec` URL stays stable.
@@ -24,7 +22,7 @@
 2. Repo Settings → Pages → Source: **GitHub Actions**. The bundled workflow deploys the repo root (which contains `index.html` + `.nojekyll`).
 3. Project-site base paths work out of the box (all asset URLs are relative: `./css/…`, `./js/…`).
 4. **No API configuration needed.** The deployed `/exec` URL is fixed in `js/config.js`, so the site opens directly in LIVE MODE. Override only if the deployment changes via the `?api=` query parameter.
-5. Share keys **out of band** (password manager / sealed envelope). Staff enter a key once per tab when saving; keys live in page memory only (cleared on refresh, never stored) and are sent with write requests.
+5. No keys to distribute — saving is open. If writes must be limited, restrict the deployment's "Who has access" setting instead.
 
 ## C. Verification checklist
 

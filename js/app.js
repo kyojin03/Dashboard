@@ -57,8 +57,7 @@
     if (S.error) {
       b.className = 'banner error';
       var retry = S.errorKind === 'connection' ? ' <button class="btn small" data-act="retry">Retry</button>' : '';
-      var hint = S.errorKind === 'auth' ? ' Your key was rejected or is missing — saving will ask for it.' : '';
-      b.innerHTML = '<strong>Live data unavailable.</strong> ' + esc(S.error) + hint + retry;
+      b.innerHTML = '<strong>Live data unavailable.</strong> ' + esc(S.error) + retry;
       return;
     }
     if (!S.connected) {
@@ -273,7 +272,7 @@
     if (S.selectedMember === 'ALL') {
       return '<div class="panel"><h2>Whose work are you recording?</h2>' +
         '<p>Select your name at the top to open your personal weekly dashboard.</p>' +
-        '<p class="muted">Selecting a name only chooses what to view. It does not prove who you are; saving still needs the edit key.</p></div>' +
+        '<p class="muted">Selecting a name only chooses what to view. Saving is open to anyone with this link.</p></div>' +
         '<div class="panel"><h2>How the week works</h2><ol>' +
         '<li>Add your <strong>planned tasks</strong> at the start of the week (title is enough).</li>' +
         '<li>During the week, record <strong>additional tasks</strong> with time spent and whether they affected your plan.</li>' +
@@ -472,12 +471,11 @@
     }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
-  // Roster administration lives in Team Overview (admin key required).
+  // Roster administration lives in Team Overview; saving is open.
   // There is no configuration screen: the live API is fixed in js/config.js
   // and the app connects on load.
   function rosterPanel() {
     return '<div class="panel"><h2>Team roster (' + S.members.length + ' members)</h2>' +
-      '<p class="muted">Roster changes need the admin key (authorized users only).</p>' +
       '<ul class="clean">' +
       S.members.map(function (m) { return '<li><strong>' + esc(m.display_name) + '</strong><br><span class="muted">' + esc(m.role) + '</span></li>'; }).join('') +
       '</ul><div class="row" style="margin-top:10px"><button class="btn" data-act="add-member">+ Add member (admin)</button></div></div>';
@@ -928,44 +926,19 @@
     }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
-  // Write gates. Keys are page-lifetime memory only (never persisted); the
-  // backend re-verifies them on every request. Demo mode needs no key.
-  // Member selection never grants anything — it only scopes the view.
-  // Callbacks always fire exactly once as cb(ok).
-  function askKeyDialog(kind, cb) {
-    var isAdmin = kind === 'admin';
-    var dlg = document.createElement('dialog');
-    dlg.innerHTML = '<h3 style="margin-top:0">' + (isAdmin ? 'Admin key needed' : 'Edit key needed') + '</h3>' +
-      '<p class="muted">' + (isAdmin
-        ? 'Roster changes are restricted to authorized users.'
-        : 'Saving is restricted to authorized editors.') +
-      ' The key is used for this action only, kept in this tab\'s memory, and cleared on refresh — never stored.</p>' +
-      '<div class="form"><label class="full">' + (isAdmin ? 'Admin key' : 'Edit key') + '<input id="kVal" type="password" autocomplete="off"></label></div>' +
-      '<div class="row" style="margin-top:10px"><button class="btn primary" id="kGo">Continue</button><button class="btn" id="kCancel">Cancel</button></div>';
-    document.body.appendChild(dlg); dlg.showModal();
-    var input = dlg.querySelector('#kVal');
-    if (input) input.focus();
-    dlg.querySelector('#kCancel').onclick = function () { dlg.close(); dlg.remove(); cb(false); };
-    dlg.querySelector('#kGo').onclick = function () {
-      var v = dlg.querySelector('#kVal').value;
-      if (!v) { toast('Enter the key to continue, or cancel.'); return; }
-      dlg.querySelector('#kGo').disabled = true;
-      if (isAdmin) window.AppConfig.setAdminKey(v); else window.AppConfig.setEditKey(v);
-      dlg.close(); dlg.remove(); cb(true);
-    };
-  }
+  // Write gates — open mode (owner decision 2026-10-13): anyone with the
+  // app link can save. The backend validates every write; locking,
+  // idempotency, and audit history still apply. Member selection only
+  // scopes the view. Callbacks always fire exactly once as cb(ok).
   function requireLiveKey(cb) {
     if (window.Store.isDemo()) { cb(true); return; }
     if (!S.connected) { toast('Not connected to the live records — use Retry first.'); cb(false); return; }
-    if (window.AppConfig.getEditKey()) { cb(true); return; }
-    askKeyDialog('edit', cb);
+    cb(true);
   }
   function requireAdminKey(cb) {
     if (window.Store.isDemo()) { cb(true, ''); return; }
     if (!S.connected) { toast('Not connected to the live records — use Retry first.'); cb(false, ''); return; }
-    var admin = window.AppConfig.getAdminKey();
-    if (admin) { cb(true, admin); return; }
-    askKeyDialog('admin', function (ok) { cb(ok, ok ? window.AppConfig.getAdminKey() : ''); });
+    cb(true, '');
   }
 
   function taskDialog(type, existing) {
@@ -1217,7 +1190,7 @@
 
   function memberDialog() {
     var dlg = document.createElement('dialog');
-    dlg.innerHTML = '<h3 style="margin-top:0">Add team member (admin)</h3><div class="form">' +
+    dlg.innerHTML = '<h3 style="margin-top:0">Add team member</h3><div class="form">' +
       '<label class="full">Display name*<input id="mName"></label>' +
       '<label class="full">Role<input id="mRole"></label></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn primary" id="mSave">Save</button><button class="btn" id="mCancel">Cancel</button></div>';

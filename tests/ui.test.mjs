@@ -33,11 +33,13 @@ describe('live-first startup (no silent demo fallback)', () => {
     const storeJs = fs.readFileSync(path.join(ROOT, 'js/store.js'), 'utf8');
     assert.ok(storeJs.includes('enterDemo'), 'demo engine stays available underneath');
   });
-  it('write gates ask for the key via dialog (no settings redirect)', () => {
-    assert.ok(appJs.includes('function askKeyDialog(kind, cb)'));
+  it('write gates are open (no key dialog, no settings redirect)', () => {
+    assert.doesNotMatch(appJs, /function askKeyDialog/);
+    assert.doesNotMatch(appJs, /kVal/);
     assert.ok(appJs.includes("a === 'retry'"));
     assert.ok(!/Enter the edit key in Settings first/.test(appJs), 'old settings-redirect prompt must be gone');
     assert.ok(!/Admin key required — enter it in Settings/.test(appJs), 'old admin-redirect prompt must be gone');
+    assert.ok(!/key was rejected or is missing/.test(appJs), 'stale key-rejection hint must be gone');
   });
   it('boot restores prefs and always connects live first', () => {
     const body = fnBody(appJs, 'boot');
@@ -93,9 +95,8 @@ describe('premium redesign guards', () => {
   it('Esc-dismissed dialogs clean up instead of lingering', () => {
     assert.ok(appJs.includes("addEventListener('close'"), 'missing dialog close-cleanup listener');
   });
-  it('member + key dialogs guard against double submit', () => {
+  it('member dialog guards against double submit', () => {
     assert.ok(appJs.includes("querySelector('#mSave').disabled = true"));
-    assert.ok(appJs.includes("querySelector('#kGo').disabled = true"));
   });
   it('nav uses short labels with icons; roster admin lives in Team Overview', () => {
     assert.ok(html.includes('<svg viewBox="0 0 24 24"'), 'nav icons missing');

@@ -8,11 +8,9 @@
  *   3. window.APP_CONFIG.API_BASE_URL default (deployed endpoint)
  * Base path support: all internal links are relative; API calls use absolute URL.
  *
- * Secrets: edit/admin keys are NEVER written to localStorage, sessionStorage,
- * or any persisted store. They live only in a page-lifetime memory holder
- * (cleared on refresh) and are sent with individual write requests. Without
- * organizational SSO there is no secure persistent authentication — this is
- * documented in docs/SECURITY.md rather than faked.
+ * Secrets: no keys are requested anywhere in the interface (open-write mode
+ * since 2026-10-13). The holder below is retained unused for compatibility;
+ * nothing is ever written to localStorage, sessionStorage, or any store.
  *
  * Preferences: only non-sensitive UI choices (member, view) persist, in
  * localStorage 'aa_prefs'. The reporting week always defaults to current.
