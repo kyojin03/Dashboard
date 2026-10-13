@@ -1,4 +1,4 @@
-/* Main UI — views: My Dashboard (personal), Team Overview (management), Reports, Settings. */
+/* Main UI — views: My Week (personal), Additional Tasks, Team Overview (management), Weekly Reports. */
 (function () {
   var S = window.Store.state;
   var R = window.Reports;
@@ -78,7 +78,7 @@
     return '<div class="panel"><h2>Couldn\'t reach the live records</h2>' +
       '<p>' + esc(S.error || 'The connection failed.') + '</p>' +
       '<div class="row"><button class="btn primary" data-act="retry">Retry</button></div>' +
-      '<p class="muted">Sample data is never shown automatically. Use Settings → “Use demo mode” only if you explicitly want labeled sample data.</p></div>';
+      '<p class="muted">Sample data is never shown automatically.</p></div>';
   }
 
   function renderMemberOptions() {
@@ -350,6 +350,7 @@
       h += '</div>';
     });
     h += '<div class="panel"><h2>Data quality</h2>' + dataQuality(wt) + '</div>';
+    h += rosterPanel();
     return h;
   }
 
@@ -404,23 +405,15 @@
     }).catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
-  function vSettings() {
-    var api = window.AppConfig.getApiBase();
-    return '<div class="panel"><h2>Connection</h2>' +
-      '<div class="form"><label class="full">Apps Script /exec URL<input id="cfgApi" value="' + esc(api) + '" placeholder="https://script.google.com/macros/s/…/exec"></label>' +
-      '<label>Edit key (this tab’s memory only)<input id="cfgEdit" type="password" placeholder="asked again when saving"></label>' +
-      '<label>Admin key (this tab’s memory only)<input id="cfgAdmin" type="password" placeholder="asked again for roster changes"></label></div>' +
-      '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="save-config">Save & connect</button>' +
-      '<button class="btn" data-act="use-demo">Use demo mode</button>' +
-      '<button class="btn" data-act="ping">Test connection</button>' +
-      '<button class="btn" data-act="forget-keys">Forget keys</button></div>' +
-      '<p class="muted">Keys are kept in this tab’s memory only and cleared on refresh — never stored. Saving asks for a key only when needed. Selecting a name does not identify anyone.</p>' +
-      '<p class="muted">Mode: <strong>' + (window.Store.isDemo() ? 'DEMO' : 'LIVE') + '</strong> · API: <span class="mono">' + esc(api || '(not set)') + '</span></p></div>' +
-      '<div class="panel"><h2>Team roster (' + S.members.length + ' members)</h2><p class="muted">Roster changes need the admin key (authorized users only).</p>' +
-      '<table><thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Active</th></tr></thead><tbody>' +
-      S.members.map(function (m) { return '<tr><td class="mono">' + esc(m.member_id) + '</td><td>' + esc(m.display_name) + '</td><td>' + esc(m.role) + '</td><td>' + esc(m.is_active) + '</td></tr>'; }).join('') +
-      '</tbody></table><div class="row" style="margin-top:10px"><button class="btn" data-act="add-member">+ Add member (admin)</button></div></div>' +
-      '<div class="panel"><h2>Audit history</h2><p class="muted">Creates, updates, reassignments, deadline changes, completions, and archives are recorded server-side. Open any task to see its history.</p></div>';
+  // Roster administration lives in Team Overview (admin key required).
+  // There is no configuration screen: the live API is fixed in js/config.js
+  // and the app connects on load.
+  function rosterPanel() {
+    return '<div class="panel"><h2>Team roster (' + S.members.length + ' members)</h2>' +
+      '<p class="muted">Roster changes need the admin key (authorized users only).</p>' +
+      '<ul class="clean">' +
+      S.members.map(function (m) { return '<li><strong>' + esc(m.display_name) + '</strong><br><span class="muted">' + esc(m.role) + '</span></li>'; }).join('') +
+      '</ul><div class="row" style="margin-top:10px"><button class="btn" data-act="add-member">+ Add member (admin)</button></div></div>';
   }
 
   // ---------- render ----------
@@ -434,7 +427,6 @@
     else if (view === 'additional') h = vAdditional();
     else if (view === 'team') h = vTeam();
     else if (view === 'reports') h = vReports();
-    else if (view === 'settings') h = vSettings();
     else { view = 'my'; h = vMy(); }
     el.innerHTML = offlinePanel() + h;
     bindView();
@@ -471,11 +463,7 @@
     else if (a === 'export-csv') exportCsv();
     else if (a === 'print') window.print();
     else if (a === 'snapshot') saveSnapshot();
-    else if (a === 'save-config') saveConfig();
-    else if (a === 'use-demo') { window.Store.enterDemo(); S.error = ''; submitResult = ''; render(); toast('Demo mode enabled.'); }
-    else if (a === 'ping') ping();
     else if (a === 'retry') { S.error = ''; S.errorKind = ''; connectLive(); }
-    else if (a === 'forget-keys') { window.AppConfig.clearKeys(); render(); toast('Keys cleared from this tab\'s memory.'); }
   }
 
   // ---------- weekly check-in: slim dialogs, save, submit ----------
@@ -1228,21 +1216,7 @@
       .catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
-  // ---------- config / connect ----------
-  function saveConfig() {
-    window.AppConfig.setApiBase($('cfgApi').value.trim());
-    if ($('cfgEdit').value) window.AppConfig.setEditKey($('cfgEdit').value);
-    if ($('cfgAdmin').value) window.AppConfig.setAdminKey($('cfgAdmin').value);
-    connectLive();
-  }
-  function ping() {
-    var api = $('cfgApi') ? $('cfgApi').value.trim() : window.AppConfig.getApiBase();
-    if ($('cfgApi')) window.AppConfig.setApiBase(api);
-    if (!api) { toast('Set the /exec URL first.'); return; }
-    setLoading(true, 'Testing connection…'); render();
-    window.Api.ping().then(function () { setLoading(false); S.error = ''; render(); toast('Connection OK.'); })
-      .catch(function (e) { setLoading(false); render(); fail(e); });
-  }
+  // ---------- live connect (automatic on load; never demo fallback) ----------
   function connectLive() {
     if (!window.AppConfig.getApiBase()) {
       S.connected = false;
@@ -1289,9 +1263,9 @@
   // ---------- boot ----------
   function boot() {
     // Restore harmless preferences (member + view only; week always current).
-    // Live mode is the default: connect first, demo only by explicit action.
+    // Live mode connects first; the demo engine has no interface entry.
     var prefs = window.AppConfig.getPrefs();
-    if (prefs.view === 'my' || prefs.view === 'additional' || prefs.view === 'team' || prefs.view === 'reports' || prefs.view === 'settings') {
+    if (prefs.view === 'my' || prefs.view === 'additional' || prefs.view === 'team' || prefs.view === 'reports') {
       view = prefs.view;
     }
     if (prefs.memberId) S.selectedMember = prefs.memberId; // validated against the roster after load
@@ -1312,7 +1286,6 @@
     document.querySelectorAll('.nav button').forEach(function (b) {
       b.onclick = function () { view = b.dataset.view; window.AppConfig.setPrefs({ view: view }); render(); };
     });
-    $('settingsLink').onclick = function () { view = 'settings'; window.AppConfig.setPrefs({ view: view }); render(); };
     connectLive();
   }
 

@@ -27,15 +27,15 @@ describe('live-first startup (no silent demo fallback)', () => {
     assert.doesNotMatch(body, /enterDemo/);
     assert.match(body, /S\.connected = false/);
   });
-  it('demo activates only through the explicit demo action', () => {
-    const uses = [...appJs.matchAll(/\.enterDemo\(\)/g)].length;
-    assert.equal(uses, 1, 'enterDemo must have exactly one caller (use-demo), found ' + uses);
-    assert.ok(appJs.includes("a === 'use-demo'"));
+  it('demo has no UI entry point (live-only interface; engine retained)', () => {
+    assert.ok(!appJs.includes("a === 'use-demo'"), 'demo action must have no UI entry');
+    assert.ok(!/data-act="use-demo"/.test(appJs), 'demo button markup must be gone');
+    const storeJs = fs.readFileSync(path.join(ROOT, 'js/store.js'), 'utf8');
+    assert.ok(storeJs.includes('enterDemo'), 'demo engine stays available underneath');
   });
-  it('write gates ask for the key instead of redirecting to settings', () => {
+  it('write gates ask for the key via dialog (no settings redirect)', () => {
     assert.ok(appJs.includes('function askKeyDialog(kind, cb)'));
     assert.ok(appJs.includes("a === 'retry'"));
-    assert.ok(appJs.includes("a === 'forget-keys'"));
     assert.ok(!/Enter the edit key in Settings first/.test(appJs), 'old settings-redirect prompt must be gone');
     assert.ok(!/Admin key required — enter it in Settings/.test(appJs), 'old admin-redirect prompt must be gone');
   });
@@ -56,17 +56,20 @@ describe('UI wiring consistency', () => {
       assert.ok(appJs.includes(`a === '${a}'`), `no handler branch for data-act="${a}"`);
     }
   });
-  it('every nav data-view (and settings link) has a render branch', () => {
+  it('every nav data-view has a render branch; no settings UI remains', () => {
     const views = [...indexHtml.matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
     assert.deepEqual([...views].sort(), ['additional', 'my', 'reports', 'team']);
     for (const v of views) {
       assert.ok(appJs.includes(`view === '${v}'`), `no render branch for view "${v}"`);
     }
-    assert.ok(indexHtml.includes('id="settingsLink"'), 'secondary settings entry must exist');
-    assert.ok(appJs.includes("view = 'settings'"), 'settings view must be reachable');
+    assert.ok(!indexHtml.includes('id="settingsLink"'), 'settings link must be removed from markup');
+    assert.ok(!indexHtml.includes('cfgApi') && !indexHtml.includes('cfgEdit'), 'API/key form fields must be gone');
+    assert.ok(!appJs.includes('function vSettings'), 'vSettings must be removed');
+    assert.ok(!appJs.includes("view = 'settings'"), 'no settings view routing may remain');
+    assert.ok(!appJs.includes('function saveConfig') && !appJs.includes('function ping('), 'config actions must be removed');
   });
   it('static element ids referenced by the app exist in index.html', () => {
-    for (const id of ['memberSelect', 'weekInput', 'settingsLink', 'banner', 'loading', 'view', 'toasts']) {
+    for (const id of ['memberSelect', 'weekInput', 'banner', 'loading', 'view', 'toasts']) {
       assert.ok(indexHtml.includes(`id="${id}"`), `missing element #${id} in index.html`);
     }
   });
@@ -95,10 +98,12 @@ describe('premium redesign guards', () => {
     assert.ok(appJs.includes("querySelector('#mSave').disabled = true"));
     assert.ok(appJs.includes("querySelector('#kGo').disabled = true"));
   });
-  it('nav uses short labels with icons; settings stays secondary', () => {
+  it('nav uses short labels with icons; roster admin lives in Team Overview', () => {
     assert.ok(html.includes('<svg viewBox="0 0 24 24"'), 'nav icons missing');
     assert.ok(!/data-view="settings"/.test(html), 'settings must not be a main nav item');
-    assert.ok(html.includes('id="settingsLink"'));
+    assert.ok(!html.includes('id="settingsLink"'), 'settings link must be removed');
+    assert.ok(appJs.includes('function rosterPanel'), 'roster admin panel must exist');
+    assert.ok(appJs.includes("data-act=\"add-member\""), 'roster add action must remain wired');
   });
   it('mobile bottom tab bar with safe-area room exists', () => {
     assert.ok(css.includes('safe-area-inset-bottom'), 'safe-area handling missing');

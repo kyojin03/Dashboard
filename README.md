@@ -14,7 +14,7 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 
 | Path | Purpose |
 |---|---|
-| `index.html` | Single-page app (My Dashboard, Team Overview, Reports, Settings) |
+| `index.html` | Single-page app (My Week, Additional Tasks, Team Overview, Weekly Reports) |
 | `css/styles.css` | Institutional responsive theme |
 | `js/config.js` | API URL resolution (`?api=` → localStorage → default), session-only keys |
 | `js/api.js` | API client — UI/API separation, consistent `{ok,data}` envelope |
@@ -44,7 +44,7 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 ### 2. Frontend — GitHub Pages
 1. Push this repo to GitHub. Pages workflow (`.github/workflows/pages.yml`) deploys on push to `main`.
 2. Settings → Pages → Source: **GitHub Actions**.
-3. Open the site — it connects to the live API automatically (the `/exec` URL is the built-in default; override via `?api=` or Settings only if needed). Distribute edit/admin keys to authorized staff **out of band** (never commit them); staff enter a key once per tab when saving.
+3. Open the site — it connects to the live API automatically (the `/exec` URL is fixed in `js/config.js`; override via `?api=` only if the deployment changes). Distribute edit/admin keys to authorized staff **out of band** (never commit them); staff enter a key once per tab when saving.
 
 ### 3. Weekly workflow (minimal entry)
 Member selector → week → add planned tasks (title is enough) → record additional tasks with time + Yes/No effect on plan → enter one % per planned task at week's end (blank = not yet reported, excluded from the average) with optional incomplete reasons (required only when a cause is attributed, with a link for additional-work causes) → review → Submit Weekly Accomplishment (freezes the week's snapshot; earlier weeks never change) → report/CSV/print. No daily updates or time logs required for planned tasks.
@@ -54,9 +54,9 @@ Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G
 
 ## Access model (summary)
 - **Member selector = view filter, not authentication.** Individual vs team dashboards only change scope.
-- **Live first:** the deployed `/exec` URL ships as the default, so the app opens directly in LIVE MODE. Connection failures show an error with Retry — sample data is never shown automatically (demo needs the explicit Settings action).
+- **Live first:** the deployed `/exec` URL is fixed in `js/config.js`, so the app opens directly in LIVE MODE. Connection failures show an error with Retry — sample data is never shown automatically (the demo engine has no interface entry).
 - **Writes** require the edit key, asked at write time and kept in tab memory only (cleared on refresh, never in localStorage/sessionStorage); verified server-side against Script Properties.
-- **Roster/settings** require the separate admin key under the same handling.
+- **Roster changes** (Team Overview, admin key) under the same handling.
 - **Preferences** (member, view) persist locally; the week always defaults to current.
 - **Read-only** works without any key. Full audit trail in `TaskEvents`. See `docs/SECURITY.md` for limitations (no true identity without organizational SSO) and the safer SSO-migration path.
 
@@ -71,7 +71,7 @@ Count completion = completed eligible ÷ total eligible × 100 (cancelled exclud
 - ✅ Task CRUD, daily updates (history-preserving), work logs, impact links, history view, archive
 - ✅ Individual + team dashboards, filters, turnaround + workload analytics, data-quality flags
 - ✅ Weekly report (personal + team), CSV export, print/PDF layout, idempotent snapshots
-- ✅ Demo mode (labeled), loading/error/success states, no silent localStorage fallback
+- ✅ Direct live startup with Retry on failure (no silent demo fallback), loading/error/success states
 - ✅ Audit fixes 2026-10-12: worklog rollup single-count, validate-before-write (no orphan rows/events), `original_due_at` immutable after creation, impact self-link/planned-only enforcement, week-scoped weekly reports, Manila overdue/same-day/week-start in all frontend paths, stable client task ids + double-submit guards, partial-refresh warnings
 - ⚠️ **Not verified in this environment:** live Apps Script deployment + real Sheets round-trip (requires Google account + deployment step above); scheduled snapshot trigger (configure per `docs/DEPLOYMENT.md`); organizational SSO (documented migration path in `docs/SECURITY.md`)
 - ❌ No individual account registration (by design); no Excel export (CSV + print provided)

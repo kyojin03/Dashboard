@@ -8,7 +8,7 @@
 (function () {
   function base() {
     var b = window.AppConfig.getApiBase();
-    if (!b) throw { code: 'NOT_CONFIGURED', message: 'API endpoint is not configured. Open Config and set the Apps Script /exec URL, or use Demo mode.' };
+    if (!b) throw { code: 'NOT_CONFIGURED', message: 'Live records address is not configured. The API URL is fixed in js/config.js.' };
     return b;
   }
 

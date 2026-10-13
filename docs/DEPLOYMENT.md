@@ -23,14 +23,14 @@
 1. Push this repo to GitHub (`main` branch).
 2. Repo Settings → Pages → Source: **GitHub Actions**. The bundled workflow deploys the repo root (which contains `index.html` + `.nojekyll`).
 3. Project-site base paths work out of the box (all asset URLs are relative: `./css/…`, `./js/…`).
-4. **No API configuration needed.** The deployed `/exec` URL ships as the app default (`js/config.js`), so the site opens directly in LIVE MODE. Override only if the deployment changes: `?api=` query param → `localStorage aa_api_base` (Settings) → built-in default.
+4. **No API configuration needed.** The deployed `/exec` URL is fixed in `js/config.js`, so the site opens directly in LIVE MODE. Override only if the deployment changes via the `?api=` query parameter.
 5. Share keys **out of band** (password manager / sealed envelope). Staff enter a key once per tab when saving; keys live in page memory only (cleared on refresh, never stored) and are sent with write requests.
 
 ## C. Verification checklist
 
 - [ ] `?action=ping` on the `/exec` URL returns `{"ok":true,…}`.
-- [ ] Frontend opens directly in LIVE MODE (no manual URL entry); Test connection → "Connection OK" if re-checked in Settings.
+- [ ] Frontend opens directly in LIVE MODE with no setup prompt; killing the network shows an error banner with Retry (never demo data).
 - [ ] Create a test task → update to 100% with outcome note → history shows events.
 - [ ] Weekly report generates; CSV export downloads; print preview is clean.
 - [ ] `npm test` passes (47/47).
-- [ ] Demo banner shows in demo mode; live banner shows after connecting; server failures show an error banner (never silent local fallback).
+- [ ] Live banner shows after connecting; server failures show an error banner with Retry (never silent demo fallback).

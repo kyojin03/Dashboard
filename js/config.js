@@ -4,7 +4,7 @@
  * the app opens directly in LIVE MODE with no per-browser configuration.
  * Resolution order:
  *   1. ?api= query parameter (per-link override, not persisted)
- *   2. localStorage 'aa_api_base' (manual override from Settings)
+ *   2. localStorage 'aa_api_base' (manual override; no interface sets it)
  *   3. window.APP_CONFIG.API_BASE_URL default (deployed endpoint)
  * Base path support: all internal links are relative; API calls use absolute URL.
  *
