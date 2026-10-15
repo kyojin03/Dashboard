@@ -133,6 +133,23 @@ export function weightedCompletion(tasks) {
   return { percent: round1((num / den) * 100), excludedCount, includedCount: elig.length - excludedCount };
 }
 
+/** Manila calendar date for ANY input (date-only passes through). */
+export function dayKey(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const s = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: DEFAULT_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(v));
+  } catch {
+    return s.slice(0, 10);
+  }
+}
+
+/** Today in Manila (for date-input defaults). */
+export function todayKey() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: DEFAULT_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+
 /** Monday-based week key helpers (ISO date strings YYYY-MM-DD). */
 export function mondayOf(dateStr, timeZone = DEFAULT_TIMEZONE) {
   const d = new Date(dateStr.length <= 10 ? dateStr + 'T12:00:00' : dateStr);
@@ -160,7 +177,7 @@ export function weekRange(weekStartISO) {
 
 export function inWeek(dateISO, weekStartISO) {
   if (!dateISO) return false;
-  const day = String(dateISO).slice(0, 10);
+  const day = dayKey(dateISO);
   const { week_start, week_end } = weekRange(weekStartISO);
   return day >= week_start && day <= week_end;
 }
@@ -175,7 +192,7 @@ export function splitCarryover(tasks, weekStartISO) {
   const assignedThisWeek = [];
   const carriedOver = [];
   for (const t of tasks || []) {
-    const created = String(t.created_at || '').slice(0, 10);
+    const created = dayKey(t.created_at || '');
     if (created && created >= week_start && inWeek(t.created_at, weekStartISO)) assignedThisWeek.push(t);
     else if (created && created < week_start) carriedOver.push(t);
     else if (!created) carriedOver.push(t); // missing timestamp → flag, treat as carryover, never double count
@@ -188,7 +205,7 @@ export function isOverdue(task, nowISO = new Date().toISOString(), timeZone = DE
   if (!task || task.status === 'Completed' || task.status === 'Cancelled') return false;
   const due = task.current_due_at || task.original_due_at;
   if (!due) return false;
-  const dueDay = String(due).slice(0, 10);
+  const dueDay = dayKey(due);
   const nowDay = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(new Date(nowISO));
   return nowDay > dueDay;
@@ -201,11 +218,11 @@ export function isOverdue(task, nowISO = new Date().toISOString(), timeZone = DE
 export function onTimeCompletion(tasks) {
   const elig = eligibleTasks(tasks).filter((t) => t.status === 'Completed' && t.completed_at);
   const withOriginal = elig.filter((t) => t.original_due_at);
-  const onTimeOriginal = withOriginal.filter((t) => String(t.completed_at).slice(0, 10) <= String(t.original_due_at).slice(0, 10));
+  const onTimeOriginal = withOriginal.filter((t) => dayKey(t.completed_at) <= dayKey(t.original_due_at));
   const withCurrent = elig.filter((t) => t.current_due_at || t.original_due_at);
   const onTimeCurrent = withCurrent.filter((t) => {
     const due = t.current_due_at || t.original_due_at;
-    return String(t.completed_at).slice(0, 10) <= String(due).slice(0, 10);
+    return dayKey(t.completed_at) <= dayKey(due);
   });
   const pct = (a, b) => (b === 0 ? null : round1((a / b) * 100));
   return {
@@ -281,7 +298,7 @@ export function turnaroundStats(additionalTasks, opts = {}) {
     const m = {};
     for (const t of arr) {
       if (!t[field]) continue;
-      const d = String(t[field]).slice(0, 10);
+      const d = dayKey(t[field]);
       m[d] = (m[d] || 0) + 1;
     }
     return m;
@@ -313,7 +330,7 @@ export function additionalWorkloadSummary(tasks, workLogs, weekStartISO = null) 
   const adds = (tasks || []).filter((t) => t.task_type === 'ADDITIONAL' && !t.archived_at && t.status !== 'Cancelled');
   const received = adds.filter((t) => inScope(t.created_at));
   const completed = adds.filter((t) => t.status === 'Completed' && t.completed_at && inScope(t.completed_at));
-  const carried = weekStartISO ? adds.filter((t) => String(t.created_at || '').slice(0, 10) < weekRange(weekStartISO).week_start && t.status !== 'Completed') : [];
+  const carried = weekStartISO ? adds.filter((t) => dayKey(t.created_at || '') < weekRange(weekStartISO).week_start && t.status !== 'Completed') : [];
   const logs = (workLogs || []).filter((l) => inScope(l.work_date || l.created_at));
   const addIds = new Set(received.map((t) => t.task_id).concat(adds.map((t) => t.task_id)));
   const effort = logs.filter((l) => addIds.has(l.task_id)).reduce((s, l) => s + (Number(l.minutes_spent) || 0), 0);
@@ -367,6 +384,36 @@ export function summarizeImpacts(impacts) {
   return { count: list.length, byType, reasons };
 }
 
+/** Client-side CSV for any in-scope task list (mirrors reports.js). */
+export function buildTeamCsv(tasks) {
+  const head = ['task_id', 'title', 'owner_id', 'task_type', 'status', 'completion_percent', 'priority', 'original_due_at', 'current_due_at', 'completed_at', 'estimated_minutes', 'actual_minutes', 'blocked_reason'];
+  const esc2 = (v) => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  return [head.join(',')].concat((tasks || []).map((t) => head.map((h) => esc2(t[h])).join(','))).join('\n');
+}
+
+/** Pure optimistic-apply: NEW task array with %/status updates applied. */
+export function applyPercentUpdates(tasks, updates, nowISO) {
+  const byId = {};
+  (updates || []).forEach((u) => { byId[String(u.task_id)] = u; });
+  return (tasks || []).map((t) => {
+    const u = byId[String(t.task_id)];
+    if (!u) return t;
+    const wasCompleted = t.status === 'Completed';
+    const n = Object.assign({}, t);
+    n.completion_percent = u.completion_percent;
+    if (u.status) n.status = u.status;
+    if (u.status === 'Completed') n.completed_at = nowISO;
+    if (wasCompleted && u.completion_percent < 100) n.completed_at = '';
+    n.last_updated_at = nowISO;
+    if (u.impact_reason !== undefined) n.impact_reason = u.impact_reason;
+    if (u.impact_notes !== undefined) n.impact_notes = u.impact_notes;
+    return n;
+  });
+}
+
 /** Validate a work-log entry (no negative time, end after start). */
 export function validateWorkLog(l) {
   const errors = [];
@@ -391,7 +438,7 @@ export function scopeWeek(tasks, weekStartISO) {
     if (!t || t.archived_at) return false;
     return inWeek(t.created_at, weekStartISO) || inWeek(t.current_due_at || t.original_due_at, weekStartISO) ||
       inWeek(t.completed_at, weekStartISO) ||
-      (String(t.created_at || '').slice(0, 10) < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
+      (dayKey(t.created_at || '') && dayKey(t.created_at || '') < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
   });
 }
 
@@ -423,7 +470,7 @@ export function validateImpactLink(additionalTask, plannedTask, weekStartISO) {
   if (plannedTask.task_type !== 'PLANNED') errors.push('The affected task must be a planned task.');
   const inScope = (t) => inWeek(t.created_at, weekStartISO) || inWeek(t.current_due_at || t.original_due_at, weekStartISO) ||
     inWeek(t.completed_at, weekStartISO) ||
-    (String(t.created_at || '').slice(0, 10) < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
+    (dayKey(t.created_at || '') && dayKey(t.created_at || '') < weekStartISO && t.status !== 'Completed' && t.status !== 'Cancelled');
   if (!inScope(additionalTask)) errors.push('The additional task is outside this reporting week.');
   if (!inScope(plannedTask)) errors.push('The planned task is outside this reporting week.');
   return { ok: errors.length === 0, errors };

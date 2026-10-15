@@ -1,0 +1,23 @@
+{
+  "env": { "browser": true, "es2020": true, "node": true },
+  "parserOptions": { "ecmaVersion": 2020, "sourceType": "script" },
+  "globals": {
+    "google": "off"
+  },
+  "rules": {
+    "no-unused-vars": ["error", { "args": "none", "varsIgnorePattern": "^_" }],
+    "no-redeclare": "error",
+    "no-undef": "off",
+    "no-eval": "error",
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
+    "curly": ["error", "all"],
+    "semi": ["error", "always"],
+    "quotes": ["error", "single", { "avoidEscape": true }]
+  },
+  "overrides": [
+    {
+      "files": ["tests/*.mjs", "backend/*.gs"],
+      "parserOptions": { "sourceType": "module", "ecmaVersion": 2022 }
+    }
+  ]
+}

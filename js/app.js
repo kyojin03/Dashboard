@@ -7,10 +7,7 @@
   var submitResult = '';
 
   function $ (id) { return document.getElementById(id); }
-  function esc(s) {
-    return String(s === null || s === undefined ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  var esc = window.Utils.esc; // single escaping implementation (see js/utils.js)
   function toast(msg) {
     var t = $('toasts'); var d = document.createElement('div'); d.textContent = msg;
     t.appendChild(d); setTimeout(function () { d.remove(); }, 4200);
@@ -27,6 +24,13 @@
     S.errorKind = window.Api.errorKind ? window.Api.errorKind(err) : '';
     renderBanner();
     toast('Error: ' + msg);
+  }
+
+  // CONFLICT means the server holds newer data: reload it so the screen
+  // shows current values, then show the message.
+  function failMaybeRefresh(e) {
+    if (e && e.code === 'CONFLICT') refreshLive().then(render, render);
+    fail(e);
   }
 
   function memberName(id) {
@@ -101,8 +105,17 @@
     S.weekStart = window.Store.monday(iso + 'T12:00:00Z');
     submitResult = ''; lastReport = '';
     renderWeekLabel();
-    if (!window.Store.isDemo()) refreshLive().then(render).catch(function (err) { fail(err); });
-    else render();
+    if (window.Store.isDemo()) { render(); return; }
+    var hit = cacheRead(S.weekStart);
+    if (hit) {
+      applyWeek(hit, true); validateMember(); S.error = ''; S.errorKind = '';
+      render(); // instant cached week; confirmed silently below
+    } else {
+      setLoading(true, 'Loading week…'); render();
+    }
+    refreshLive().then(function () {
+      S.connected = true; validateMember(); setLoading(false); render(); prefetchNeighbors();
+    }).catch(function (err) { S.connected = false; setLoading(false); render(); fail(err); });
   }
   function shiftWeek(days) {
     var d = new Date(S.weekStart + 'T00:00:00Z');
@@ -210,7 +223,7 @@
     return planned.map(function (t) {
       var reported = !(t.completion_percent === '' || t.completion_percent === null || t.completion_percent === undefined);
       var pct = reported ? Number(t.completion_percent) : 0;
-      var due = (t.current_due_at || t.original_due_at || '').slice(0, 10);
+      var due = R.dayKey(t.current_due_at || t.original_due_at);
       var ex = existingCheckin(t);
       var aff = taskAffectors(t.task_id);
       var recorded = aff.length
@@ -257,7 +270,7 @@
         : 'No — no impact recorded.';
       var time = (t.actual_minutes === '' || t.actual_minutes === null || t.actual_minutes === undefined)
         ? 'Time not recorded' : R.fmtH(Number(t.actual_minutes));
-      var when = (t.created_at || '').slice(0, 10);
+      var when = R.dayKey(t.created_at);
       var noTime = time === 'Time not recorded';
       return '<div class="task"><div class="t-title">' + esc(t.title) +
         ' <span class="chip ' + (noTime ? 'warn' : 'idle') + '">' + esc(time) + '</span>' +
@@ -293,9 +306,10 @@
     h += weekCards(avg, planned.length, adds.length, time.totalMinutes, time.withoutTime, affectedN);
     h += '<div class="panel"><div class="panel-head"><h2>Planned tasks</h2><div class="row">' +
       (planned.length ? '<button class="btn" data-act="save-checkin">Save percentages</button>' : '') +
-      '<button class="btn primary" data-act="add-planned">+ Add Planned Task</button></div></div>' +
+      '<button class="btn primary" data-act="add-planned">+ Add Planned Task</button>' +
+      (archivedMine().length ? '<button class="btn" data-act="toggle-archived">' + (S.showArchived ? 'Hide' : 'Show') + ' archived (' + archivedMine().length + ')</button>' : '') + '</div></div>' +
       (planned.length ? '<p class="muted">Enter one % per task (0–100). Leave blank what you haven\'t measured yet; an outcome note is asked only at 100%.</p>' : '') +
-      checkinTable(planned, adds) + '</div>';
+      checkinTable(planned, adds) + archivedList() + '</div>';
     h += '<div class="panel"><div class="panel-head"><h2>Additional tasks</h2>' +
       '<button class="btn primary" data-act="add-additional">+ Add Additional Task</button></div>' +
       additionalCards(adds) + '</div>';
@@ -311,6 +325,34 @@
     return h;
   }
 
+  function archivedMine() {
+    return S.tasks.filter(function (t) {
+      return t.archived_at && (S.selectedMember === 'ALL' || t.owner_id === S.selectedMember);
+    });
+  }
+  function archivedList() {
+    if (!S.showArchived) return '';
+    var rows = archivedMine();
+    if (!rows.length) return '';
+    return '<h3 class="muted" style="margin-top:14px">Archived</h3><ul class="clean">' + rows.slice(0, 20).map(function (t) {
+      return '<li>' + esc(t.title) + ' <span class="muted">(' + esc(t.task_type) + ')</span> ' +
+        '<button class="btn small" data-restore="' + esc(t.task_id) + '">Restore</button></li>';
+    }).join('') + '</ul>';
+  }
+  function restoreTaskUI(taskId) {
+    if (window.Store.isDemo()) {
+      var t = S.tasks.filter(function (x) { return x.task_id === taskId; })[0];
+      if (t) { t.archived_at = ''; t.last_updated_at = new Date().toISOString(); }
+      render(); toast('Restored (demo).');
+      return;
+    }
+    setLoading(true, 'Restoring…'); render();
+    window.Api.restoreTask({ task_id: taskId })
+      .then(function () { return refreshLive(); })
+      .then(function () { setLoading(false); render(); toast('Restored.'); })
+      .catch(function (e) { setLoading(false); render(); failMaybeRefresh(e); });
+  }
+
   function submitChip() {
     var snap = S.snapshots.filter(function (s) {
       return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember);
@@ -321,7 +363,7 @@
     var snap = S.snapshots.filter(function (s) {
       return String(s.week_start).slice(0, 10) === S.weekStart && String(s.member_id) === String(S.selectedMember);
     })[0];
-    if (snap) return '<p><span class="badge ok">✓ Submitted</span> <span class="muted">Record frozen ' + esc(String(snap.generated_at || '').slice(0, 10)) + '. Re-submitting updates this week only.</span></p>';
+    if (snap) return '<p><span class="badge ok">✓ Submitted</span> <span class="muted">Record frozen ' + esc(R.dayKey(snap.generated_at) || '') + '. Re-submitting updates this week only.</span></p>';
     return '<p><span class="badge warn">Not yet submitted</span> <span class="muted">This week\'s record is still open.</span></p>';
   }
 
@@ -371,9 +413,11 @@
     var timeAll = R.additionalTimeMinutes(wt);
     var impAll = R.summarizeImpacts(memberImpacts('ALL'));
     var h = '<div class="panel"><h2>Team overview <span class="muted">· read-only; members record via My Dashboard</span></h2>' +
-      '<p class="muted">Week of ' + esc(fmtRange(S.weekStart)) + ' (Mon–Sun, Asia/Manila). Roles differ, so raw task counts are never treated as equal effort.</p></div>';
+      '<p class="muted">Week of ' + esc(fmtRange(S.weekStart)) + ' (Mon–Sun, Asia/Manila). Roles differ, so raw task counts are never treated as equal effort.' +
+      (S.truncated ? ' Showing ' + S.truncated.shown + ' of ' + S.truncated.total + ' tasks (server limit).' : '') + '</p></div>';
     h += weekCards(avgAll, avgAll.count, timeAll.taskCount, timeAll.totalMinutes, timeAll.withoutTime, impAll.count);
-    h += '<div class="panel"><div class="row"><button class="btn primary" data-act="gen-team-report">Generate concise team report</button></div>' +
+    h += '<div class="panel"><div class="row"><button class="btn primary" data-act="gen-team-report">Generate concise team report</button>' +
+      '<button class="btn" data-act="export-team-csv">Export this week (CSV)</button></div>' +
       '<p class="muted">Opens in Reports — review before export or printing.</p></div>';
     S.members.forEach(function (m) {
       var mt = wt.filter(function (t) { return t.owner_id === m.member_id; });
@@ -400,7 +444,7 @@
             (linked ? '<br>Affected by: ' + esc(linked) : '') + '</span>';
         }
         return '<li>' + esc(t.title) + ' — <strong>' + esc(pct) + '</strong>' +
-          (t.current_due_at ? ' <span class="muted">due ' + esc(String(t.current_due_at).slice(0, 10)) + '</span>' : '') + why +
+          (t.current_due_at ? ' <span class="muted">due ' + esc(R.dayKey(t.current_due_at)) + '</span>' : '') + why +
           ' <button class="btn small" data-open="' + esc(t.task_id) + '">Open</button></li>';
       }).join('') + '</ul>' : '<p class="muted">No planned tasks recorded.</p>';
       h += '<p><strong>Additional: ' + adds.length + ' task(s), ' + R.fmtH(time.totalMinutes) + ' recorded</strong>' +
@@ -448,7 +492,7 @@
     return '<ul class="clean">' + snaps.slice(0, 24).map(function (s) {
       var who = String(s.member_id) === 'ALL' ? 'Whole team' : memberName(s.member_id);
       return '<li><strong>' + esc(String(s.week_start).slice(0, 10)) + ' – ' + esc(String(s.week_end || weekEndOf(String(s.week_start).slice(0, 10))).slice(0, 10)) + '</strong>' +
-        ' <span class="muted">' + esc(who) + (s.generated_at ? ' · saved ' + esc(String(s.generated_at).slice(0, 10)) : '') + '</span>' +
+        ' <span class="muted">' + esc(who) + (s.generated_at ? ' · saved ' + esc(R.dayKey(s.generated_at)) : '') + '</span>' +
         ' <button class="btn small" data-snap="' + esc(String(s.week_start).slice(0, 10)) + '|' + esc(String(s.member_id)) + '">View</button></li>';
     }).join('') + '</ul>';
   }
@@ -483,8 +527,12 @@
 
   // ---------- render ----------
   function render() {
-    renderBanner(); renderMemberOptions(); renderWeekLabel();
-    document.querySelectorAll('.nav button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === view); });
+    renderBanner(); renderMemberOptions();
+    document.querySelectorAll('.nav [role="tab"]').forEach(function (b) {
+      var active = b.dataset.view === view;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
     var el = $('view');
     if (S.loading) { el.innerHTML = '<div class="skel-hero"><div class="skel c"></div><div class="skel l"></div></div><div class="skel b"></div><div class="skel p"></div><div class="skel p"></div>'; return; }
     var h = '';
@@ -500,6 +548,20 @@
   function bindView() {
     document.querySelectorAll('[data-open]').forEach(function (b) { b.onclick = function () { openTask(b.dataset.open); }; });
     document.querySelectorAll('[data-act]').forEach(function (b) { b.onclick = function () { act(b.dataset.act); }; });
+    document.querySelectorAll('[data-restore]').forEach(function (b) { b.onclick = function () { restoreTaskUI(b.dataset.restore); }; });
+    var tabs = [];
+    document.querySelectorAll('.nav [role="tab"]').forEach(function (b) { tabs.push(b); });
+    tabs.forEach(function (b, i) {
+      b.onclick = function () { view = b.dataset.view; window.AppConfig.setPrefs({ view: view }); render(); };
+      b.onkeydown = function (e) {
+        var j = null;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') j = 0;
+        else if (e.key === 'End') j = tabs.length - 1;
+        if (j !== null) { e.preventDefault(); tabs[j].focus(); tabs[j].click(); }
+      };
+    });
     document.querySelectorAll('[data-snap]').forEach(function (b) {
       b.onclick = function () {
         var parts = String(b.dataset.snap).split('|');
@@ -546,12 +608,14 @@
     else if (a === 'add-member') memberDialog();
     else if (a === 'gen-report') genReport();
     else if (a === 'export-csv') exportCsv();
+    else if (a === 'export-team-csv') exportTeamCsv();
+    else if (a === 'toggle-archived') { S.showArchived = !S.showArchived; render(); }
     else if (a === 'print') window.print();
     else if (a === 'snapshot') saveSnapshot();
     else if (a === 'discard-checkin') render();
     else if (a === 'week-prev') shiftWeek(-7);
     else if (a === 'week-next') shiftWeek(7);
-    else if (a === 'week-today') setWeek(new Date().toISOString().slice(0, 10));
+    else if (a === 'week-today') setWeek(R.todayKey());
     else if (a === 'retry') { S.error = ''; S.errorKind = ''; connectLive(); }
   }
 
@@ -721,7 +785,7 @@
         link = { additional_task_id: row.linkedId, affected_task_id: t.task_id, impact_type: row.effect, reason: row.explanation, evidence_notes: '' };
       }
       var cur = existingCheckin(t);
-      var next = { task_id: t.task_id, completion_percent: pct };
+      var next = { task_id: t.task_id, completion_percent: pct, expected_updated_at: t.last_updated_at };
       var dirty = pct !== Number(t.completion_percent);
       if (pct === 100 && t.status !== 'Completed') { next.status = 'Completed'; next.outcome_note = row.outcomeNote; dirty = true; }
       else if (t.status === 'Completed' && pct < 100) { next.status = 'In Progress'; dirty = true; }
@@ -749,8 +813,11 @@
     return { updates: updates, errors: errors };
   }
 
-  // Save the check-in: one updateTask per changed row, then one upsertImpact
-  // per new/changed link. No daily updates or time logs required.
+  // Save the check-in: optimistic local apply first (instant UI), then one
+  // updateTask per changed row + one upsertImpact per new/changed link.
+  // Success confirms against the server; failure rolls back to server truth.
+  // No daily updates or time logs required. Guarded against double-submit.
+  var checkinSaving = false;
   function saveCheckin() {
     var planned = plannedList(weekTasks(scopedTasks()));
     var adds = weekTasks(scopedTasks()).filter(function (t) { return t.task_type === 'ADDITIONAL' && t.status !== 'Cancelled'; });
@@ -766,21 +833,16 @@
     }
     if (window.Store.isDemo()) {
       var now = new Date().toISOString();
+      var prevById = {};
+      S.tasks.forEach(function (t) { prevById[String(t.task_id)] = t.completion_percent; });
+      S.tasks = R.applyPercentUpdates(S.tasks, c.updates, now);
       c.updates.forEach(function (u) {
         var t = S.tasks.filter(function (x) { return x.task_id === u.task_id; })[0];
         if (!t) return;
-        var prev = Number(t.completion_percent);
-        t.completion_percent = u.completion_percent;
-        if (u.status) t.status = u.status;
-        if (u.status === 'Completed') t.completed_at = now;
-        if (t.status === 'Completed' && u.completion_percent < 100) t.completed_at = '';
-        if (u.impact_reason !== undefined) t.impact_reason = u.impact_reason;
-        if (u.impact_notes !== undefined) t.impact_notes = u.impact_notes;
-        t.last_updated_at = now;
         if (u.outcome_note) {
           S.updates.push({
             update_id: window.Store.uid('U'), task_id: t.task_id, member_id: t.owner_id,
-            update_date: S.weekStart, previous_percent: prev, new_percent: 100,
+            update_date: S.weekStart, previous_percent: prevById[String(t.task_id)], new_percent: 100,
             accomplishment_notes: u.outcome_note, remaining_work: '', blocker_notes: '', created_at: now
           });
         }
@@ -801,10 +863,16 @@
       render(); toast('Saved ' + c.updates.length + ' update(s) (demo).');
       return Promise.resolve({ saved: c.updates.length, errors: c.errors.length });
     }
+    if (checkinSaving) { toast('Already saving — one moment.'); return Promise.resolve({ saved: 0, blocked: true }); }
+    checkinSaving = true;
     return new Promise(function (resolve) {
+      var done = function (v) { checkinSaving = false; resolve(v); };
       requireLiveKey(function (ok) {
-        if (!ok) { resolve({ saved: 0, blocked: true }); return; }
-        setLoading(true, 'Saving…'); render();
+        if (!ok) { done({ saved: 0, blocked: true }); return; }
+        var stamped = new Date().toISOString();
+        S.tasks = R.applyPercentUpdates(S.tasks, c.updates, stamped); // optimistic: instant UI
+        render();
+        toast('Saving ' + c.updates.length + ' update(s)…');
         var chain = Promise.resolve();
         c.updates.forEach(function (u) {
           var link = u._link; delete u._link;
@@ -814,8 +882,11 @@
         });
         chain.then(function () { return refreshLive(); }).then(function () {
           setLoading(false); render(); toast('Saved ' + c.updates.length + ' update(s).');
-          resolve({ saved: c.updates.length, errors: c.errors.length });
-        }).catch(function (e) { setLoading(false); render(); fail(e); resolve({ saved: 0, failed: true }); });
+          done({ saved: c.updates.length, errors: c.errors.length });
+        }).catch(function (e) {
+          refreshLive().then(render, render); // roll back to server truth
+          setLoading(false); fail(e); done({ saved: 0, failed: true });
+        });
       });
     });
   }
@@ -953,10 +1024,10 @@
       '<label class="full">Description / expected output<textarea id="dDesc" rows="3">' + esc(t.description || '') + '</textarea></label>' +
       '<label>Owner<select id="dOwner">' + S.members.map(function (m) { return '<option value="' + esc(m.member_id) + '"' + (t.owner_id === m.member_id ? ' selected' : '') + '>' + esc(m.display_name) + '</option>'; }).join('') + '</select></label>' +
       '<label>Type<select id="dType"><option' + (t.task_type === 'PLANNED' ? ' selected' : '') + '>PLANNED</option><option' + (t.task_type === 'ADDITIONAL' ? ' selected' : '') + '>ADDITIONAL</option></select></label>' +
-      '<label>Priority<select id="dPri">' + ['Low', 'Medium', 'High', 'Urgent'].map(function (p) { return '<option' + (t.priority === p ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
+      '<label>Priority<select id="dPri">' + ['Low', 'Medium', 'High', 'Urgent', 'Critical'].map(function (p) { return '<option' + (t.priority === p ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
       '<label>Status<select id="dStatus">' + ['Not Started', 'In Progress', 'Blocked', 'Completed', 'Cancelled'].map(function (p) { return '<option' + (t.status === p ? ' selected' : '') + '>' + p + '</option>'; }).join('') + '</select></label>' +
       '<label>Progress %<input id="dPct" type="number" min="0" max="100" value="' + esc(t.completion_percent || 0) + '"></label>' +
-      '<label>Due date<input id="dDue" type="date" value="' + esc(String(t.current_due_at || '').slice(0, 10)) + '"></label>' +
+      '<label>Due date<input id="dDue" type="date" value="' + esc(R.dayKey(t.current_due_at) || '') + '"></label>' +
       '<label>Est. minutes<input id="dEst" type="number" min="0" value="' + esc(t.estimated_minutes || '') + '"></label>' +
       '<label>Actual minutes<input id="dAct" type="number" min="0" value="' + esc(t.actual_minutes || '') + '"></label>' +
       '<label>Requested by<input id="dReq" value="' + esc(t.requested_by || '') + '"></label>' +
@@ -1010,11 +1081,11 @@
     requireLiveKey(function (ok) { if (!ok) return;
       setLoading(true, 'Saving…'); render();
       var call = existing
-        ? window.Api.updateTask(Object.assign({ task_id: existing.task_id }, payload))
+        ? window.Api.updateTask(Object.assign({ task_id: existing.task_id, expected_updated_at: existing.last_updated_at }, payload))
         : window.Api.createTask(Object.assign({ clientMutationId: window.Store.uid('M') }, payload));
       call.then(function () { return refreshLive(); })
         .then(function () { setLoading(false); render(); toast('Saved.'); })
-        .catch(function (e) { setLoading(false); render(); fail(e); });
+        .catch(function (e) { setLoading(false); render(); failMaybeRefresh(e); });
     });
   }
 
@@ -1068,7 +1139,7 @@
     dlg.innerHTML = '<h3 style="margin-top:0">Daily update — ' + esc(t.title) + '</h3>' +
       '<p class="muted">Previous progress: ' + esc(t.completion_percent) + '%. You do not need to re-enter the description.</p>' +
       '<div class="form"><label>New progress %<input id="uPct" type="number" min="0" max="100" value="' + esc(t.completion_percent) + '"></label>' +
-      '<label>Date<input id="uDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '"></label>' +
+      '<label>Date<input id="uDate" type="date" value="' + R.todayKey() + '"></label>' +
       '<label class="full">Accomplishment notes<textarea id="uAcc" rows="3"></textarea></label>' +
       '<label class="full">Remaining work<input id="uRem"></label>' +
       '<label class="full">Blocker notes<input id="uBlo"></label>' +
@@ -1078,7 +1149,7 @@
     dlg.querySelector('#uCancel').onclick = function () { dlg.close(); dlg.remove(); };
     dlg.querySelector('#uSave').onclick = function () {
       var p = {
-        task_id: t.task_id, member_id: t.owner_id,
+        task_id: t.task_id, member_id: t.owner_id, update_id: window.Store.uid('U'),
         new_percent: Number(dlg.querySelector('#uPct').value || 0),
         update_date: dlg.querySelector('#uDate').value,
         accomplishment_notes: dlg.querySelector('#uAcc').value,
@@ -1109,7 +1180,7 @@
   function logDialog(t) {
     var dlg = document.createElement('dialog');
     dlg.innerHTML = '<h3 style="margin-top:0">Log effort — ' + esc(t.title) + '</h3>' +
-      '<div class="form"><label>Date<input id="lDate" type="date" value="' + new Date().toISOString().slice(0, 10) + '"></label>' +
+      '<div class="form"><label>Date<input id="lDate" type="date" value="' + R.todayKey() + '"></label>' +
       '<label>Minutes spent<input id="lMin" type="number" min="0" max="1440" placeholder="e.g. 90"></label>' +
       '<label>Start<input id="lStart" type="datetime-local"></label><label>End<input id="lEnd" type="datetime-local"></label>' +
       '<label>Category<input id="lCat" placeholder="e.g. Analysis, Urgent request"></label>' +
@@ -1279,19 +1350,20 @@
   }
 
   function exportCsv() {
-    var rows = S.tasks.filter(function (t) { return !t.archived_at; });
-    var head = ['task_id', 'title', 'owner_id', 'task_type', 'status', 'completion_percent', 'priority', 'original_due_at', 'current_due_at', 'completed_at', 'estimated_minutes', 'actual_minutes', 'blocked_reason'];
-    var esc2 = function (v) {
-      var s = v === null || v === undefined ? '' : String(v);
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    var csv = [head.join(',')].concat(rows.map(function (t) { return head.map(function (h) { return esc2(t[h]); }).join(','); })).join('\n');
     if (!window.Store.isDemo()) {
       window.Api.exportCsv({ sheet: 'Tasks' }).then(function (r) { download('tasks.csv', r.csv); toast('Exported ' + r.rowCount + ' rows from server.'); }).catch(fail);
       return;
     }
-    download('tasks-demo.csv', csv);
+    download('tasks-demo.csv', R.buildTeamCsv(S.tasks.filter(function (t) { return !t.archived_at; })));
     toast('CSV downloaded (demo data).');
+  }
+
+  // Team Overview CSV: the current week scope, built locally (same columns as
+  // the server export) so it works identically in demo and live modes.
+  function exportTeamCsv() {
+    var rows = weekTasks(S.tasks.filter(function (t) { return !t.archived_at; }));
+    download('team-week-' + S.weekStart + '.csv', R.buildTeamCsv(rows));
+    toast('Downloaded ' + rows.length + ' task(s) for the week of ' + S.weekStart + '.');
   }
 
   function download(name, text) {
@@ -1308,6 +1380,94 @@
       .catch(function (e) { setLoading(false); render(); fail(e); });
   }
 
+  // ---------- week data: one parallel refresh, cached, prefetched ----------
+  // A screen refresh is ONE logical load (initLoad + 4 independent lists in
+  // parallel), cached per week in memory + localStorage (5 min TTL), with the
+  // previous/next weeks prefetched silently. Tab switches never refetch —
+  // they only re-render. Stale-while-revalidate: cached data renders instantly,
+  // then a background refresh confirms it. Cache holds plain records only.
+  var weekCache = {};
+  var CACHE_TTL_MS = 5 * 60 * 1000;
+  function cacheRead(w) {
+    var mem = weekCache[w];
+    if (mem && (Date.now() - mem.ts) < CACHE_TTL_MS) return mem.data;
+    try {
+      var raw = localStorage.getItem('aa_week_' + w);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || !o.data || !o.data.init || !Array.isArray(o.data.init.tasks)) return null;
+      if ((Date.now() - o.ts) > CACHE_TTL_MS) return null;
+      weekCache[w] = o;
+      return o.data;
+    } catch (e) { return null; }
+  }
+  function cachePut(w, data) {
+    weekCache[w] = { ts: Date.now(), data: data };
+    try {
+      var s = JSON.stringify({ ts: Date.now(), data: data });
+      if (s.length < 250000) localStorage.setItem('aa_week_' + w, s);
+    } catch (e) { /* cache is best-effort only */ }
+  }
+  function settled(p) {
+    return p.then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, e: e }; });
+  }
+  function fetchWeek(w) {
+    return Promise.all([
+      settled(window.Api.initLoad({ week_start: w })),
+      settled(window.Api.listImpacts({})),
+      settled(window.Api.listWorkLogs({})),
+      settled(window.Api.listDailyUpdates({})),
+      settled(window.Api.listSnapshots({}))
+    ]).then(function (rs) {
+      if (!rs[0].ok) throw rs[0].e;
+      var warnings = [];
+      var labels = ['impacts', 'work logs', 'daily updates', 'snapshots'];
+      for (var i = 0; i < 4; i++) {
+        if (!rs[i + 1].ok) warnings.push(labels[i] + ': ' + ((rs[i + 1].e && rs[i + 1].e.message) || 'failed'));
+      }
+      return {
+        init: rs[0].v,
+        impacts: rs[1].ok ? rs[1].v || [] : [],
+        workLogs: rs[2].ok ? rs[2].v || [] : [],
+        updates: rs[3].ok ? rs[3].v || [] : [],
+        snapshots: rs[4].ok ? rs[4].v || [] : [],
+        warnings: warnings
+      };
+    });
+  }
+  function applyWeek(d, keepError) {
+    S.members = (d.init && d.init.members) || S.members;
+    S.tasks = (d.init && d.init.tasks) || [];
+    S.settings = (d.init && d.init.settings) || S.settings;
+    S.truncated = (d.init && d.init.tasksTruncated) ? { shown: ((d.init.tasks) || []).length, total: d.init.tasksTotal } : null;
+    S.impacts = d.impacts || [];
+    S.workLogs = d.workLogs || [];
+    S.updates = d.updates || [];
+    S.snapshots = d.snapshots || [];
+    if (!keepError) {
+      S.error = (d.warnings && d.warnings.length)
+        ? 'Partial refresh — showing fresh tasks but stale ' + d.warnings.join('; ') + '. Retry shortly.' : '';
+      S.errorKind = S.error ? 'connection' : '';
+    }
+  }
+  function shiftWeekKey(weekStart, days) {
+    var d = new Date(weekStart + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+  function prefetchNeighbors() {
+    if (window.Store.isDemo() || !S.connected) return;
+    [shiftWeekKey(S.weekStart, -7), shiftWeekKey(S.weekStart, 7)].forEach(function (w) {
+      if (cacheRead(w)) return;
+      fetchWeek(w).then(function (d) { cachePut(w, d); }, function () { /* silent: on-demand load covers it */ });
+    });
+  }
+  function validateMember() {
+    // A remembered member that no longer exists falls back to whole team.
+    if (S.selectedMember !== 'ALL' && !S.members.some(function (m) { return m.member_id === S.selectedMember; })) {
+      S.selectedMember = 'ALL';
+    }
+  }
   // ---------- live connect (automatic on load; never demo fallback) ----------
   function connectLive() {
     if (!window.AppConfig.getApiBase()) {
@@ -1316,39 +1476,32 @@
       render();
       return;
     }
-    setLoading(true, 'Loading live records…'); render();
-    window.Api.initLoad({ week_start: S.weekStart })
-      .then(function (d) {
-        window.Store.enterLive(d);
-        // A remembered member that no longer exists falls back to whole team.
-        if (S.selectedMember !== 'ALL' && !S.members.some(function (m) { return m.member_id === S.selectedMember; })) {
-          S.selectedMember = 'ALL';
-        }
-        S.error = ''; S.errorKind = ''; setLoading(false); render();
-      })
+    var hit = cacheRead(S.weekStart);
+    if (hit) {
+      applyWeek(hit, true);
+      validateMember();
+      S.error = ''; S.errorKind = '';
+      render(); // instant: stale-while-revalidate, confirmed below
+    } else {
+      setLoading(true, 'Loading live records…'); render();
+    }
+    refreshLive().then(function () {
+      S.connected = true;
+      validateMember();
+      setLoading(false); render();
+      prefetchNeighbors();
+    }).catch(function (e) {
       // No demo fallback: a failed live load stays a visible error with Retry.
-      .catch(function (e) { S.connected = false; setLoading(false); render(); fail(e); });
+      S.connected = false; setLoading(false); render(); fail(e);
+    });
   }
-  function refreshLive() {
-    var warnings = [];
-    return window.Api.initLoad({ week_start: S.weekStart }).then(function (d) {
-      S.members = d.members || S.members;
-      S.tasks = d.tasks || [];
-      S.settings = d.settings || S.settings;
-      return window.Api.listImpacts({}).then(function (im) { S.impacts = im || []; }).catch(function (e) { warnings.push('impacts: ' + ((e && e.message) || 'failed')); });
-    }).then(function () {
-      var p = S.selectedMember === 'ALL' ? {} : { member_id: S.selectedMember };
-      return window.Api.listWorkLogs(p).then(function (w) { S.workLogs = w || []; }).catch(function (e) { warnings.push('work logs: ' + ((e && e.message) || 'failed')); });
-    }).then(function () {
-      var p = S.selectedMember === 'ALL' ? {} : { member_id: S.selectedMember };
-      return window.Api.listDailyUpdates(p).then(function (u) { S.updates = u || []; }).catch(function (e) { warnings.push('daily updates: ' + ((e && e.message) || 'failed')); });
-    }).then(function () {
-      // Snapshots power the submitted / not-yet-submitted status line.
-      return window.Api.listSnapshots({}).then(function (s) { S.snapshots = s || []; }).catch(function (e) { warnings.push('snapshots: ' + ((e && e.message) || 'failed')); });
-    }).then(function () {
-      // Partial refreshes must be visible: stale sub-lists alongside fresh tasks
-      // would silently misstate effort and progress.
-      S.error = warnings.length ? 'Partial refresh — showing fresh tasks but stale ' + warnings.join('; ') + '. Retry shortly.' : '';
+  function refreshLive(week) {
+    if (window.Store.isDemo()) return Promise.resolve(null);
+    var w = week || S.weekStart;
+    return fetchWeek(w).then(function (d) {
+      cachePut(w, d);
+      if (w === S.weekStart) applyWeek(d);
+      return d;
     });
   }
 
@@ -1368,13 +1521,24 @@
     };
     renderWeekLabel();
     document.querySelectorAll('.weekstep [data-act]').forEach(function (b) { b.onclick = function () { act(b.dataset.act); }; });
-    document.querySelectorAll('.nav button').forEach(function (b) {
-      b.onclick = function () { view = b.dataset.view; window.AppConfig.setPrefs({ view: view }); render(); };
-    });
+    if (window.addEventListener) {
+      window.addEventListener('beforeunload', function (e) {
+        var sb = document.getElementById('savebar');
+        if (sb && !sb.hidden) { e.preventDefault(); e.returnValue = ''; }
+      });
+    }
     connectLive();
   }
 
   window.App = { boot: boot, render: render };
+  // First request starts at script parse (before DOMContentLoaded): warms the
+  // week cache so boot usually renders instantly. Errors are swallowed here;
+  // connectLive() always performs its own load and reports failures.
+  try {
+    if (window.AppConfig.getApiBase()) {
+      refreshLive().then(function (d) { cachePut(S.weekStart, d); }, function () { /* boot reports */ });
+    }
+  } catch (e) { /* boot will connect */ }
   // Esc-dismissed dialogs clean themselves up instead of lingering hidden.
   document.addEventListener('close', function (e) {
     if (e.target && e.target.tagName === 'DIALOG') e.target.remove();

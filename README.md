@@ -6,9 +6,9 @@ Internal workload tracking and analytics for the Academic Affairs team. Answers:
 Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google Sheets.**
 
 - Frontend: `index.html` + `css/` + `js/` (no framework, no `google.script.run`, `fetch()` only)
-- Backend: `backend/Code.gs` (Apps Script, deployed as `/exec`)
-- Database: Google Sheets (8 sheets, stable headers, position-independent reads)
-- Tests: `npm test` — 113 tests, all passing (formulas, audit regressions, personal dashboard, weekly process, API client, UI wiring, startup config)
+- Backend: `backend/Code.gs` v2.1 (Apps Script, deployed as `/exec`)
+- Database: Google Sheets (9 sheets: +DeletionLog; stable headers, plain-text columns, position-independent reads)
+- Tests: `npm test` — 133 tests, all passing (formulas, audit regressions, personal dashboard, weekly process, API client v2, UI wiring, startup config)
 
 ## Repository layout
 
@@ -17,12 +17,13 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 | `index.html` | Single-page app (My Week, Additional Tasks, Team Overview, Weekly Reports) |
 | `css/styles.css` | Institutional responsive theme |
 | `js/config.js` | API URL resolution (`?api=` → localStorage → default); unused key holder |
-| `js/api.js` | API client — UI/API separation, consistent `{ok,data}` envelope |
+| `js/api.js` | API client v2 — one `request()` wrapper: 25 s timeout, retry with backoff on BUSY/network, per-code messages, optional ID token |
+| `js/utils.js` | Shared esc/DOM/Manila-date/debounce helpers (single implementations) |
 | `js/metrics.js` | Shared business logic + formulas (mirrored in `Code.gs`) |
 | `js/reports.js` | Client-side reporting calculations |
 | `js/store.js` | State + explicit labeled Demo mode (never mixes with production) |
 | `js/app.js` | UI rendering and workflows |
-| `backend/Code.gs` | Full JSON API: roster, tasks, updates, logs, history, impacts, analytics, reports, snapshots, CSV export |
+| `backend/Code.gs` | v2.1 JSON API: roster, tasks (+restore), updates, logs, history, impacts (pair-upsert), analytics, reports, snapshots, CSV export, DeletionLog; Manila dates, pagination, report cache, AUTH open default (google optional) |
 | `backend/appsscript.json` | Manifest (Asia/Manila, V8) |
 | `tests/metrics.test.mjs` | Automated tests (formulas, validation, timezone, carryover, turnaround, snapshots, access) |
 | `sample-data/sample-data.json` | Clearly separated sample data (evaluation only) |
@@ -37,8 +38,10 @@ Architecture: **GitHub Pages frontend → Google Apps Script JSON API → Google
 3. Project Settings → **Script Properties**, add:
    - `TIMEZONE` — `Asia/Manila` (optional, defaults apply)
    (`EDIT_KEY` / `ADMIN_KEY` are no longer enforced since 2026-10-13; leftover values are ignored.)
-4. In editor, run `setup()` once (creates all 8 sheets, seeds the 11-member roster + settings). Authorize when prompted.
+4. In editor, run `setup()` once, then `migrateSheetsToPlainText()` once if the sheet already has data (converts auto-parsed dates back to text; safe to re-run). Authorize when prompted (external-requests scope is needed for sign-in verification code, even in open mode).
 5. Deploy → New deployment → Web app → Execute as: **Me**, Access: **Anyone** (or domain-limited if available) → copy the `/exec` URL.
+6. Optional: run `installWeeklyTrigger()` (Friday 18:00 snapshots) and/or `installKeepWarmTrigger()` (weekday pre-warm).
+7. Auth stays **open** unless you set Script Property `AUTH_MODE=google` + `GOOGLE_CLIENT_ID` (+ `ADMIN_EMAILS`, roster emails) — see `backend/Code.gs` header and `docs/SECURITY.md`.
 
 ### 2. Frontend — GitHub Pages
 1. Push this repo to GitHub. Pages workflow (`.github/workflows/pages.yml`) deploys on push to `main`.
@@ -63,14 +66,14 @@ Michelle Ann F. Pablo (Director) · Michelle M. Macatangay (Manager) · Divina G
 Count completion = completed eligible ÷ total eligible × 100 (cancelled excluded, planned/additional separate). Weighted = Σ(est × % ÷ 100) ÷ Σ(est) × 100 (tasks without positive estimates excluded and counted). On-time vs original and vs current deadlines (both preserved). Overdue = past current deadline, not completed/cancelled, Asia/Manila date. Same-day = completed on receipt date ÷ completed with timestamps (+ pending count shown). See `docs/METRICS.md` for the full contract.
 
 ## Testing
-`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and open-write mode with validation/locking/audit intact, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging, plus weekly-process tests: week separation, average accomplishment, additional-time totals, Yes/No impact documentation, and prior-week report stability, plus startup tests: default live URL, override priority, memory-only keys, preference persistence, and no-demo-fallback guards, plus permanent-delete cleanup tests. Synthetic data only. **Verified: 113/113 pass.**
+`npm test` — covers validation, completed/cancelled handling, count/weighted/on-time, deadlines + revisions, timezone boundaries, turnaround/aging/same-day, missing data, duplicate guards, history preservation, impacts, snapshots, empty-data/division-by-zero, plus audit regressions: reports.js↔metrics.js mirror consistency, Manila week-start, validate-before-write ordering, single worklog rollup, week-scoped reports, and open-write mode with validation/locking/audit intact, plus personal-dashboard tests: member-scope isolation, no double counting across members, per-member on-time/turnaround agreement, and clarification flagging, plus weekly-process tests: week separation, average accomplishment, additional-time totals, Yes/No impact documentation, and prior-week report stability, plus startup tests: default live URL, override priority, memory-only keys, preference persistence, and no-demo-fallback guards, plus permanent-delete cleanup tests, plus v2.1 tests: envelope tolerance, BUSY retry, timeouts, ID-token plumbing, Manila day keys, team-CSV builder, optimistic-apply helper, ARIA tabs, restore flow, and API/UI static guards. Synthetic data only. **Verified: 133/133 pass.**
 
 ## What is implemented vs. what remains
-- ✅ Data model (8 sheets), backend API (20 actions), locking + idempotency, audit events
-- ✅ Task CRUD, daily updates (history-preserving), work logs, impact links, history view, archive + permanent delete (open; snapshots keep old totals)
+- ✅ Data model (9 sheets), backend API v2.1 (pagination, restore, tombstoned deletes, report cache), locking + idempotency, audit events
+- ✅ Task CRUD with optimistic-concurrency (`expected_updated_at`), daily updates (history-preserving), work logs (derived actuals), impact links (pair-upsert), history view, archive + restore + permanent delete (open; snapshots keep old totals)
 - ✅ Individual + team dashboards, filters, turnaround + workload analytics, data-quality flags
-- ✅ Weekly report (personal + team), CSV export, print/PDF layout, idempotent snapshots
-- ✅ Direct live startup with Retry on failure (no silent demo fallback), loading/error/success states
+- ✅ Weekly report (personal + team), CSV export (incl. Team Overview), print/PDF layout, idempotent snapshots, saved-weeks browser
+- ✅ Direct live startup with Retry on failure (no silent demo fallback); SWR week cache + prefetch; optimistic check-in saves with rollback; unsaved-changes guard; loading/error/success states
 - ✅ Audit fixes 2026-10-12: worklog rollup single-count, validate-before-write (no orphan rows/events), `original_due_at` immutable after creation, impact self-link/planned-only enforcement, week-scoped weekly reports, Manila overdue/same-day/week-start in all frontend paths, stable client task ids + double-submit guards, partial-refresh warnings
 - ⚠️ **Not verified in this environment:** live Apps Script deployment + real Sheets round-trip (requires Google account + deployment step above); scheduled snapshot trigger (configure per `docs/DEPLOYMENT.md`); organizational SSO (documented migration path in `docs/SECURITY.md`)
 - ❌ No individual account registration (by design); no Excel export (CSV + print provided)

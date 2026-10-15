@@ -14,17 +14,22 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const API_SRC = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
 
-function loadApi(fetchStub) {
+function loadApi(fetchStub, opts) {
   const calls = [];
+  const token = (opts && opts.idToken) || '';
   const sandbox = {
     window: {
       AppConfig: {
         getApiBase: () => 'https://example.invalid/exec',
         getEditKey: () => 'EK',
-        getAdminKey: () => 'AK'
+        getAdminKey: () => 'AK',
+        getIdToken: () => token
       }
     },
-    console
+    console,
+    AbortController: AbortController,
+    setTimeout: setTimeout,
+    clearTimeout: clearTimeout
   };
   sandbox.fetch = async (url, opts) => {
     calls.push({ url, opts });
@@ -46,16 +51,72 @@ describe('Api request shapes', () => {
     assert.match(decodeURIComponent(calls[0].url), /"owner_id":"M001"/);
     assert.equal(calls[0].opts.method, 'GET');
   });
-  it('POST sends the JSON envelope as text/plain with both keys', async () => {
-    const { Api, calls } = loadApi(async () => jsonRes({ ok: true, data: {} }));
+  it('POST sends {action, payload} as text/plain with no legacy key fields', async () => {
+    const { Api, calls } = loadApi(async () => jsonRes({ ok: true, v: '2.1.0', data: {} }));
     await Api.createTask({ title: 'T' });
     assert.equal(calls[0].opts.method, 'POST');
     assert.match(calls[0].opts.headers['Content-Type'], /text\/plain/);
     const body = JSON.parse(calls[0].opts.body);
     assert.equal(body.action, 'createTask');
-    assert.equal(body.key, 'EK');
-    assert.equal(body.adminKey, 'AK');
     assert.equal(body.payload.title, 'T');
+    assert.ok(!('key' in body) && !('adminKey' in body), 'v2 uses idToken, not shared keys');
+  });
+  it('sends the ID token on GET and POST when one is held', async () => {
+    const { Api, calls } = loadApi(async () => jsonRes({ ok: true, v: '2.1.0', data: {} }), { idToken: 'TOK' });
+    await Api.ping();
+    assert.match(calls[0].url, /idToken=TOK/);
+    await Api.createTask({ title: 'T' });
+    assert.equal(JSON.parse(calls[1].opts.body).idToken, 'TOK');
+  });
+  it('accepts the v2 envelope and tolerates a missing v field', async () => {
+    const { Api } = loadApi(async () => jsonRes({ ok: true, v: '2.1.0', data: { status: 'ok' } }));
+    assert.deepEqual(JSON.parse(JSON.stringify(await Api.ping())), { status: 'ok' });
+  });
+});
+
+describe('retry, timeout, and error text', () => {
+  it('retries BUSY with backoff then succeeds', async () => {
+    let n = 0;
+    const { Api, calls } = loadApi(async () => (++n === 1
+      ? jsonRes({ ok: false, error: { code: 'BUSY', message: 'busy' } })
+      : jsonRes({ ok: true, data: 'done' })));
+    Api.retry.baseMs = 1;
+    try {
+      assert.equal(await Api.ping(), 'done');
+      assert.equal(calls.length, 2);
+    } finally { Api.retry.baseMs = 800; }
+  });
+  it('retries network errors, then surfaces them', async () => {
+    let n = 0;
+    const { Api, calls } = loadApi(async () => { n++; throw new TypeError('down'); });
+    Api.retry.baseMs = 1;
+    try {
+      await assert.rejects(Api.ping(), (e) => !e.code);
+      assert.equal(calls.length, 4);
+    } finally { Api.retry.baseMs = 800; }
+  });
+  it('times out a hung request', async () => {
+    const abortErr = () => Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const { Api } = loadApi((url, opts) => new Promise((_, rej) => {
+      var sig = opts && opts.signal;
+      if (!sig) { /* no signal: hang like a broken transport */ return; }
+      if (sig.aborted) rej(abortErr());
+      else sig.addEventListener('abort', function () { rej(abortErr()); });
+    }));
+    const keep = Api.retry.timeoutMs;
+    Api.retry.timeoutMs = 30;
+    try {
+      await assert.rejects(Api.ping(), (e) => e.code === 'TIMEOUT');
+    } finally { Api.retry.timeoutMs = keep; }
+  });
+  it('maps new v2 codes to clear messages', async () => {
+    const { Api } = loadApi(async () => jsonRes({ ok: true, data: {} }));
+    assert.equal(Api.errorKind({ code: 'CONFLICT' }), 'other');
+    assert.equal(Api.errorKind({ code: 'UNAUTHENTICATED' }), 'auth');
+    assert.equal(Api.errorMessage({ code: 'CONFLICT' }), 'Changed by someone else just now. Fresh data was loaded — review and try again.');
+    assert.equal(Api.errorMessage({ code: 'DUPLICATE' }), 'Already saved — a duplicate was ignored, nothing was lost.');
+    assert.equal(Api.errorMessage({ code: 'UNAUTHENTICATED' }), 'Sign-in required. Sign in and try again.');
+    assert.equal(Api.errorMessage({ code: 'SERVER_CONFIG', message: 'X' }), 'Server is misconfigured. Tell the administrator: X');
   });
 });
 
@@ -91,7 +152,10 @@ describe('Api failure modes (what the UI shows)', () => {
   });
   it('transport failures reject instead of silently succeeding', async () => {
     const { Api } = loadApi(async () => { throw new TypeError('fetch failed'); });
-    await assert.rejects(Api.weeklyReport({}));
+    Api.retry.baseMs = 1;
+    try {
+      await assert.rejects(Api.weeklyReport({}));
+    } finally { Api.retry.baseMs = 800; }
   });
   it('unconfigured endpoint fails with a guidance error before any fetch', async () => {
     const src = API_SRC;

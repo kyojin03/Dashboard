@@ -8,7 +8,7 @@
   --ink: #0f172a;
   --ink-2: #334155;
   --muted: #5b6678;
-  --faint: #94a0b3;
+  --faint: #5f6b80; /* AA ≥4.5 on --bg (was #94a0b3 at 2.44) */
   --line: #e3e8ef;
   --line-strong: #cdd5e0;
   --accent: #1f4fd8;
@@ -337,7 +337,7 @@ footer.muted { margin-top: 28px !important; padding-top: 16px; border-top: 1px s
 /* ===== Dark mode ===== */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b1220; --surface: #121a2b; --surface-2: #17213a; --ink: #e8edf6; --ink-2: #c3ccdb; --muted: #97a3b8; --faint: #6c7a93;
+    --bg: #0b1220; --surface: #121a2b; --surface-2: #17213a; --ink: #e8edf6; --ink-2: #c3ccdb;     --muted: #97a3b8; --faint: #7f8ca3; /* AA ≥4.5 on dark --bg */
     --line: #223049; --line-strong: #324363; --accent: #6b93ff; --accent-press: #86a7ff; --accent-soft: #1a2a52;
     --danger: #ff8a80; --danger-bg: #2c1618; --danger-line: #5a2a2d;
     --warn-ink: #f2c46d; --warn-bg: #2a2111; --warn-line: #55421b;

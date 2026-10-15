@@ -16,7 +16,8 @@ import {
   averageAccomplishment as mAvg, additionalTimeMinutes as mTime,
   summarizeImpacts as mImp, splitCarryover, inWeek, buildSnapshot,
   validateCheckinRow as mValidateRow, validateImpactLink as mValidateLink,
-  scopeWeek as mScope
+  scopeWeek as mScope, dayKey as mDay, todayKey as mToday,
+  buildTeamCsv as mCsv, applyPercentUpdates as mApply
 } from '../js/metrics.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -217,5 +218,70 @@ describe('impact-link integrity (no invented or cross-week links)', () => {
     ];
     assert.deepEqual(Reports.scopeWeek(tasks, WEEK_A).map((t) => t.task_id).sort(), ['A1', 'CARRY', 'P1']);
     assert.deepEqual(mScope(tasks, WEEK_A).map((t) => t.task_id).sort(), ['A1', 'CARRY', 'P1']);
+  });
+});
+
+describe('Manila day keys (never raw-slice timestamps)', () => {
+  it('converts instants in Asia/Manila, passes date-only through', () => {
+    // 2026-10-11T16:30Z is 00:30 Oct 12 in Manila — raw slicing says Oct 11.
+    assert.equal(Reports.dayKey('2026-10-11T16:30:00Z'), '2026-10-12');
+    assert.equal(mDay('2026-10-11T16:30:00Z'), '2026-10-12');
+    assert.equal(Reports.dayKey('2026-10-12'), '2026-10-12');
+    assert.equal(Reports.dayKey(''), '');
+    assert.equal(Reports.dayKey(null), '');
+    assert.equal(Reports.todayKey(), mToday());
+    assert.match(Reports.todayKey(), /^\d{4}-\d{2}-\d{2}$/);
+  });
+  it('on-time judgment uses Manila dates on both sides', () => {
+    const done = (completed, due) => ({
+      task_id: 'X', title: 'X', owner_id: 'M1', task_type: 'PLANNED', status: 'Completed',
+      completion_percent: 100, completed_at: completed, original_due_at: due, current_due_at: due,
+      created_at: '2026-10-12T08:00:00+08:00', archived_at: ''
+    });
+    // Completed 00:30 Manila Oct 13 against an Oct-13 Manila deadline: on time.
+    const tasks = [done('2026-10-12T16:30:00Z', '2026-10-13')];
+    assert.equal(Reports.onTimeCompletion(tasks).original.percent, 100);
+  });
+});
+
+describe('team CSV builder (demo and live downloads match)', () => {
+  const tasks = [
+    { task_id: 'T1', title: 'Plan, "quoted"', owner_id: 'M1', task_type: 'PLANNED', status: 'In Progress', completion_percent: 50, priority: 'Critical', original_due_at: '2026-10-16', current_due_at: '', completed_at: '', estimated_minutes: '', actual_minutes: '', blocked_reason: '' }
+  ];
+  it('emits the server column set with CSV quoting', () => {
+    const csv = Reports.buildTeamCsv(tasks);
+    const lines = csv.split('\n');
+    assert.equal(lines[0].split(',')[0], 'task_id');
+    assert.ok(lines[0].includes('blocked_reason'));
+    assert.match(lines[1], /"Plan, ""quoted"""/);
+    assert.deepEqual(norm(Reports.buildTeamCsv(tasks)), norm(mCsv(tasks)));
+  });
+});
+
+describe('optimistic apply helper (instant UI, server confirms)', () => {
+  const base = [
+    { task_id: 'P1', completion_percent: 40, status: 'In Progress', completed_at: '', last_updated_at: 'old' },
+    { task_id: 'P2', completion_percent: 0, status: 'Not Started', completed_at: '', last_updated_at: 'old' }
+  ];
+  it('applies %/status immutably and stamps completion', () => {
+    const out = Reports.applyPercentUpdates(base, [
+      { task_id: 'P1', completion_percent: 100, status: 'Completed' },
+      { task_id: 'P2', completion_percent: 20, status: 'In Progress' }
+    ], 'NOW');
+    assert.equal(out[0].completion_percent, 100);
+    assert.equal(out[0].status, 'Completed');
+    assert.equal(out[0].completed_at, 'NOW');
+    assert.equal(out[1].completion_percent, 20);
+    assert.equal(base[0].completion_percent, 40, 'input array must not be mutated');
+    assert.deepEqual(norm(out), norm(mApply(base, [
+      { task_id: 'P1', completion_percent: 100, status: 'Completed' },
+      { task_id: 'P2', completion_percent: 20, status: 'In Progress' }
+    ], 'NOW')));
+  });
+  it('clears completed_at when reopening below 100', () => {
+    const out = Reports.applyPercentUpdates(
+      [{ task_id: 'P1', completion_percent: 100, status: 'Completed', completed_at: 'OLD', last_updated_at: 'old' }],
+      [{ task_id: 'P1', completion_percent: 60, status: 'In Progress' }], 'NOW');
+    assert.equal(out[0].completed_at, '');
   });
 });

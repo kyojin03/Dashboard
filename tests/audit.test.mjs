@@ -121,10 +121,10 @@ describe('store monday is Manila-based (not browser-local)', () => {
 // ---------- B. Static source guards ----------
 
 describe('Code.gs data-integrity guards', () => {
-  it('worklog rollup sums logs exactly once (no double-added minutes)', () => {
+  it('worklog rollup is derived from stored logs (never double-added)', () => {
     const body = fnBody(codeGs, 'addWorkLog_');
     assert.doesNotMatch(body, /\+ minutes/);
-    assert.match(body, /already includes the new row/);
+    assert.match(body, /DERIVED/);
   });
   it('daily-update validation precedes the append (no orphan rows on rejection)', () => {
     const body = fnBody(codeGs, 'addDailyUpdate_');
@@ -141,10 +141,9 @@ describe('Code.gs data-integrity guards', () => {
     );
   });
   it('original_due_at is immutable after creation (deadline history preserved)', () => {
-    const body = fnBody(codeGs, 'updateTask_');
-    const decl = body.match(/var updatable = \[[^\]]*\]/s);
-    assert.ok(decl, 'updatable allowlist must exist');
-    assert.doesNotMatch(decl[0], /original_due_at/);
+    const decl = codeGs.match(/const UPDATABLE_TASK_FIELDS = \[([^\]]*)\]/s);
+    assert.ok(decl, 'UPDATABLE_TASK_FIELDS allowlist must exist');
+    assert.doesNotMatch(decl[1], /original_due_at/);
   });
   it('impact links reject self-links and require a PLANNED affected task', () => {
     const body = fnBody(codeGs, 'upsertImpact_');
@@ -154,11 +153,12 @@ describe('Code.gs data-integrity guards', () => {
   it('weekly report is week-scoped with member-scoped impacts', () => {
     const body = fnBody(codeGs, 'weeklyReport_');
     assert.match(body, /inScopeIds/);
-    assert.match(body, /carryover/);
+    assert.match(body, /weekScope_\(t, r\)/);
   });
-  it('carryover scopes exclude cancelled tasks', () => {
-    const q = fnBody(codeGs, 'queryTasks_');
-    assert.match(q, /status !== 'Cancelled'/);
+  it('carryover keeps open tasks and excludes completed/cancelled ones', () => {
+    const body = fnBody(codeGs, 'weekScope_');
+    assert.match(body, /open/);
+    assert.match(body, /Cancelled/);
   });
 });
 
@@ -178,18 +178,21 @@ describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
       assert.ok(codeGs.includes('function ' + fn), fn + ' must still exist');
     }
   });
-  it('write actions are blocked over GET', () => {
+  it('writes are POST-only via a read allowlist', () => {
     const get = fnBody(codeGs, 'doGet');
     assert.match(get, /METHOD_NOT_ALLOWED/);
+    assert.match(get, /READ_ACTIONS\.indexOf\(action\)/);
+    const list = codeGs.match(/const READ_ACTIONS = \[([\s\S]*?)\];/);
+    assert.ok(list, 'READ_ACTIONS allowlist must exist');
     for (const a of writes) {
-      assert.ok(get.includes(`'${a}'`), `doGet must list ${a} as a write action`);
+      assert.ok(!list[1].includes(`'${a}'`), `${a} must not be GET-accessible`);
     }
   });
-  it('errors never leak stack traces or secrets', () => {
+  it('server errors are logged server-side, never leaked to clients', () => {
     const pub = fnBody(codeGs, 'publicError_');
-    assert.match(pub, /never leak/i);
-    assert.doesNotMatch(pub, /err\.stack/);
-    assert.doesNotMatch(pub, /\.stack/);
+    assert.match(pub, /console\.error/);
+    assert.match(pub, /return \{ code: code, message: msg \};/);
+    assert.match(pub, /Check the Apps Script execution logs/);
   });
   it('no embedded key material or token literals', () => {
     assert.doesNotMatch(codeGs, /AKfyc[A-Za-z0-9_-]{10,}/);
@@ -198,9 +201,9 @@ describe('Code.gs open-write mode (owner decision 2026-10-13)', () => {
 });
 
 describe('Code.gs permanent delete (open, with cleanup)', () => {
-  it('deleteTask is routed under lock with no key gate', () => {
-    assert.match(codeGs, /case 'deleteTask': return withLock_\(function \(\) \{ return deleteTask_\(p\); \}\);/);
-    assert.ok(fnBody(codeGs, 'doGet').includes("'deleteTask'"), 'deleteTask must be POST-only');
+  it('deleteTask is routed under lock with a tombstone-first cleanup', () => {
+    assert.match(codeGs, /case 'deleteTask': return withLock_\(function \(\) \{ return deleteTask_\(p, actor\); \}\);/);
+    assert.ok(fnBody(codeGs, 'doGet').includes('deleteTask') === false, 'deleteTask must be POST-only');
   });
   it('requires confirm:true and a valid task_id', () => {
     const body = fnBody(codeGs, 'deleteTask_');

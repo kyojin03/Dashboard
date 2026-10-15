@@ -37,7 +37,10 @@ window.APP_CONFIG = Object.assign(
   // persisting secrets there would expose them to any script on the page
   // across sessions. Page refresh clears these; the app re-asks at write
   // time instead of pretending a stored key is an identity.
-  var keyCache = { edit: '', admin: '' };
+  // idToken is the optional Google Identity Services token (memory-only).
+  // It is sent on every request when present and ignored otherwise, so the
+  // same build works in open mode and (after setup) google mode.
+  var keyCache = { edit: '', admin: '', idToken: '' };
   window.AppConfig = {
     getApiBase: function () {
       var q = queryApi();
@@ -70,6 +73,12 @@ window.APP_CONFIG = Object.assign(
     clearKeys: function () {
       keyCache.edit = '';
       keyCache.admin = '';
+    },
+    getIdToken: function () {
+      return keyCache.idToken || '';
+    },
+    setIdToken: function (t) {
+      keyCache.idToken = t || '';
     },
     getPrefs: function () {
       try {

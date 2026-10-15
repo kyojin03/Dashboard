@@ -122,3 +122,52 @@ describe('premium redesign guards', () => {
     assert.ok(appJs.includes('class="avatar"'), 'member avatar missing');
   });
 });
+
+describe('v2.1 frontend adaptation', () => {
+  it('tabs use the ARIA tab pattern with keyboard support', () => {
+    assert.ok(indexHtml.includes('role="tablist"'), 'tablist role missing');
+    assert.ok(indexHtml.includes('role="tab"'), 'tab roles missing');
+    assert.ok(appJs.includes("setAttribute('aria-selected'"), 'aria-selected never updated');
+    assert.ok(appJs.includes('ArrowRight'), 'arrow-key tab navigation missing');
+  });
+  it('Critical priority is offered (server accepts it)', () => {
+    assert.ok(appJs.includes("'Critical'"), 'Critical priority missing from task dialog');
+  });
+  it('updates carry expected_updated_at; conflicts reload before messaging', () => {
+    assert.ok(appJs.includes('expected_updated_at'), 'optimistic concurrency field missing');
+    assert.ok(appJs.includes('function failMaybeRefresh'), 'CONFLICT reload helper missing');
+  });
+  it('archived tasks can be shown and restored', () => {
+    assert.ok(appJs.includes('function restoreTaskUI'), 'restore flow missing');
+    assert.ok(appJs.includes('data-restore='), 'restore buttons missing');
+    assert.ok(appJs.includes("data-act=\"toggle-archived\"") || appJs.includes("data-act='toggle-archived'"), 'archived toggle missing');
+  });
+  it('ID tokens ride along when held, silently otherwise', () => {
+    const apiJs = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+    assert.ok(apiJs.includes('idToken'), 'idToken plumbing missing from API client');
+    const cfgJs = fs.readFileSync(path.join(ROOT, 'js/config.js'), 'utf8');
+    assert.ok(cfgJs.includes('getIdToken') && cfgJs.includes('setIdToken'), 'memory-only token holder missing');
+  });
+  it('week data is cached, prefetched, and never auto-demoed', () => {
+    assert.ok(appJs.includes('function cacheRead') && appJs.includes('function cachePut'), 'week cache missing');
+    assert.ok(appJs.includes('function prefetchNeighbors'), 'prefetch missing');
+    assert.ok(appJs.includes("addEventListener('beforeunload'"), 'unsaved-changes guard missing');
+  });
+  it('team CSV is built client-side from the same columns', () => {
+    assert.ok(appJs.includes('function exportTeamCsv'), 'team CSV export missing');
+    assert.ok(appJs.includes("data-act=\"export-team-csv\"") || appJs.includes("data-act='export-team-csv'"), 'team CSV button missing');
+  });
+  it('daily updates carry stable ids for safe retries', () => {
+    assert.ok(appJs.includes("update_id: window.Store.uid('U')"), 'update_id missing from daily-update payload');
+  });
+  it('shared utils load before the app (single esc implementation)', () => {
+    var order = ['config.js', 'api.js', 'store.js', 'reports.js', 'utils.js', 'app.js'];
+    var last = -1;
+    order.forEach(function (f) {
+      var i = indexHtml.indexOf('js/' + f);
+      assert.ok(i > last, 'script order broken at ' + f);
+      last = i;
+    });
+    assert.ok(appJs.includes('var esc = window.Utils.esc'), 'app must alias the shared esc()');
+  });
+});

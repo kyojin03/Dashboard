@@ -28,7 +28,7 @@
   }
   function inWeek(iso, weekStart) {
     if (!iso) return false;
-    var d = String(iso).slice(0, 10);
+    var d = dayKey(iso);
     var s = new Date(weekStart + 'T00:00:00Z');
     var e = new Date(s); e.setUTCDate(e.getUTCDate() + 6);
     var a = s.toISOString().slice(0, 10), b = e.toISOString().slice(0, 10);
@@ -39,7 +39,7 @@
     var due = t.current_due_at || t.original_due_at;
     if (!due) return false;
     var now = nowISO || new Date().toISOString();
-    return manilaDay(now) > String(due).slice(0, 10);
+    return manilaDay(now) > dayKey(due);
   }
   function summarize(tasks, workLogs) {
     var planned = elig(tasks, 'PLANNED');
@@ -117,6 +117,14 @@
   // Week scope shared by every view: created, due, or completed in the week,
   // plus open carryover from earlier weeks. Single implementation so the
   // check-in, pickers, team view, and reports can never disagree.
+  /** Manila calendar date for ANY input (date-only passes through). */
+  function dayKey(v) {
+    if (v === null || v === undefined || v === '') return '';
+    var s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    return manilaDay(v);
+  }
+  function todayKey() { return manilaDay(new Date().toISOString()); }
   function scopeWeek(tasks, weekStart) {
     var s = new Date(weekStart + 'T00:00:00Z');
     var e = new Date(s); e.setUTCDate(e.getUTCDate() + 6);
@@ -125,7 +133,7 @@
       if (!t || t.archived_at) return false;
       return inWeek(t.created_at, weekStart) || inWeek(t.current_due_at || t.original_due_at, weekStart) ||
         inWeek(t.completed_at, weekStart) ||
-        (String(t.created_at || '').slice(0, 10) < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
+        (dayKey(t.created_at) && dayKey(t.created_at) < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
     });
   }
 
@@ -172,7 +180,7 @@
     var inScope = function (t) {
       return inWeek(t.created_at, weekStart) || inWeek(t.current_due_at || t.original_due_at, weekStart) ||
         inWeek(t.completed_at, weekStart) ||
-        (String(t.created_at || '').slice(0, 10) < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
+        (dayKey(t.created_at || '') && dayKey(t.created_at || '') < weekStart && t.status !== 'Completed' && t.status !== 'Cancelled');
     };
     if (!inScope(additionalTask)) errors.push('The additional task is outside this reporting week.');
     if (!inScope(plannedTask)) errors.push('The planned task is outside this reporting week.');
@@ -205,11 +213,11 @@
     var done = elig(tasks).filter(function (t) { return t.status === 'Completed' && t.completed_at; });
     function pct(a, b) { return b ? r1(a / b * 100) : null; }
     var withOrig = done.filter(function (t) { return t.original_due_at; });
-    var onOrig = withOrig.filter(function (t) { return String(t.completed_at).slice(0, 10) <= String(t.original_due_at).slice(0, 10); });
+    var onOrig = withOrig.filter(function (t) { return dayKey(t.completed_at) <= dayKey(t.original_due_at); });
     var withCur = done.filter(function (t) { return t.current_due_at || t.original_due_at; });
     var onCur = withCur.filter(function (t) {
       var d = t.current_due_at || t.original_due_at;
-      return String(t.completed_at).slice(0, 10) <= String(d).slice(0, 10);
+      return dayKey(t.completed_at) <= dayKey(d);
     });
     return {
       original: { percent: pct(onOrig.length, withOrig.length), onTime: onOrig.length, total: withOrig.length },
@@ -242,5 +250,41 @@
     return L.join('\n');
   }
 
-  window.Reports = { summarize: summarize, turnaround: turnaround, onTimeCompletion: onTimeCompletion, averageAccomplishment: averageAccomplishment, additionalTimeMinutes: additionalTimeMinutes, summarizeImpacts: summarizeImpacts, scopeWeek: scopeWeek, validateCheckinRow: validateCheckinRow, validateImpactLink: validateImpactLink, CHECKIN_REASONS: CHECKIN_REASONS, CHECKIN_REASON_LABELS: CHECKIN_REASON_LABELS, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
+  // Client-side CSV for any in-scope task list (same columns as the server
+  // export, so demo and live downloads match). Pure and unit-tested.
+  function buildTeamCsv(tasks) {
+    var head = ['task_id', 'title', 'owner_id', 'task_type', 'status', 'completion_percent', 'priority', 'original_due_at', 'current_due_at', 'completed_at', 'estimated_minutes', 'actual_minutes', 'blocked_reason'];
+    var esc2 = function (v) {
+      var s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    return [head.join(',')].concat((tasks || []).map(function (t) {
+      return head.map(function (h) { return esc2(t[h]); }).join(',');
+    })).join('\n');
+  }
+
+  // Pure optimistic-apply used by instant saves AND the demo path alike:
+  // returns a NEW task array with the given %/status updates applied.
+  // Callers refresh from the server afterwards (success confirms, failure
+  // rolls back to server truth).
+  function applyPercentUpdates(tasks, updates, nowISO) {
+    var byId = {};
+    (updates || []).forEach(function (u) { byId[String(u.task_id)] = u; });
+  return (tasks || []).map(function (t) {
+    var u = byId[String(t.task_id)];
+    if (!u) return t;
+    var wasCompleted = t.status === 'Completed';
+    var n = {};
+    for (var k in t) n[k] = t[k];
+    n.completion_percent = u.completion_percent;
+    if (u.status) n.status = u.status;
+    if (u.status === 'Completed') n.completed_at = nowISO;
+    if (wasCompleted && u.completion_percent < 100) n.completed_at = '';
+      n.last_updated_at = nowISO;
+      if (u.impact_reason !== undefined) n.impact_reason = u.impact_reason;
+      if (u.impact_notes !== undefined) n.impact_notes = u.impact_notes;
+      return n;
+    });
+  }
+  window.Reports = { summarize: summarize, turnaround: turnaround, onTimeCompletion: onTimeCompletion, averageAccomplishment: averageAccomplishment, additionalTimeMinutes: additionalTimeMinutes, summarizeImpacts: summarizeImpacts, scopeWeek: scopeWeek, validateCheckinRow: validateCheckinRow, validateImpactLink: validateImpactLink, CHECKIN_REASONS: CHECKIN_REASONS, CHECKIN_REASON_LABELS: CHECKIN_REASON_LABELS, dayKey: dayKey, todayKey: todayKey, buildTeamCsv: buildTeamCsv, applyPercentUpdates: applyPercentUpdates, inWeek: inWeek, isOverdue: isOverdue, fmtPct: fmtPct, fmtH: fmtH, buildReportText: buildReportText };
 })();
